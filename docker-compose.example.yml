@@ -1,0 +1,25 @@
+# Copy to docker-compose.yml (or append the service to an existing compose file) and fill in the
+# environment values. See docs/DESIGN.md section 2 for what each variable means.
+services:
+  easynews-nzb:
+    build: .
+    container_name: easynews-nzb
+    restart: unless-stopped
+    # Match this to the uid/gid that owns INCOMPLETE_DIR/COMPLETE_DIR on the host.
+    user: "1000:1000"
+    environment:
+      - EASYNEWS_USERNAME=changeme
+      - EASYNEWS_PASSWORD=changeme
+      - API_KEY=changeme
+      - PUBLIC_URL=http://192.0.2.10:8090
+      # Optional: front a real SABnzbd. Leave both unset to run standalone.
+      - SAB_URL=http://sabnzbd:8080
+      - SAB_API_KEY=changeme
+      - INCOMPLETE_DIR=/downloads/incomplete
+      - COMPLETE_DIR=/downloads/complete
+      - STATE_FILE=/config/state.json
+    volumes:
+      - ./config:/config
+      - ./downloads:/downloads
+    ports:
+      - "8090:8090"

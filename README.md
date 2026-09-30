@@ -48,15 +48,38 @@ will use to reach this service.
 
 ## Status
 
-Design complete, implementation in progress. See `docs/DESIGN.md` for the full specification:
-the verified Easynews API (search parameters, result fields, download URL forms), the exact Newznab
-and SABnzbd shapes the apps rely on, the ticket NZB, the download job model, and the test plan.
+Implemented in Rust; builds as a single static binary and a container image. See `docs/DESIGN.md`
+for the full specification: the verified Easynews API (search parameters, result fields, download
+URL forms), the exact Newznab and SABnzbd shapes the apps rely on, the ticket NZB, the download job
+model, and the test plan. Deployment against a real Prowlarr/Radarr/Sonarr/SABnzbd stack is tracked
+separately and not yet verified end-to-end.
 
 ## Requirements
 
 - An Easynews account (the same username and password used for NNTP access).
-- Python 3.12 or the provided container image.
+- The provided container image (a single static `x86_64-unknown-linux-musl` binary; no runtime
+  dependencies), or a Rust 1.85+ toolchain to build it yourself.
 - A folder the apps and this service both see under the same path (the "completed" folder).
+
+## Build and run
+
+```
+docker build -t easynews-nzb .
+```
+
+produces a container around a single static binary (`app/`, a Rust crate with no runtime
+dependencies once built). Copy `docker-compose.example.yml` to `docker-compose.yml`, fill in the
+environment values (see `docs/DESIGN.md` section 2), and run:
+
+```
+docker compose up -d
+```
+
+To build just the binary (for `x86_64-unknown-linux-musl`) without Docker:
+
+```
+cd app && cargo build --release --target x86_64-unknown-linux-musl
+```
 
 ## Legal
 

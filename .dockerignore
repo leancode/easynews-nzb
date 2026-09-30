@@ -1,0 +1,5 @@
+app/target/
+.git/
+docs/
+LOCAL-DEPLOYMENT.md
+*.md

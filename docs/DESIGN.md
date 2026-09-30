@@ -1,8 +1,9 @@
 # Design
 
-One Python 3.12 process (FastAPI + uvicorn + httpx, no database) that is a Newznab indexer and a
-SABnzbd-compatible download client, backed by Easynews' members-only search and download endpoints.
-Everything in section 1 was verified against a live account on 2026-09-30.
+One Rust process (axum + tokio + reqwest, no database), compiled as a single static
+`x86_64-unknown-linux-musl` binary, that is a Newznab indexer and a SABnzbd-compatible download
+client, backed by Easynews' members-only search and download endpoints. Everything in section 1 was
+verified against a live account on 2026-09-30.
 
 ## 1. Easynews API
 

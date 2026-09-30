@@ -1,11 +1,9 @@
 # private deployment notes (home network specifics)
 LOCAL-DEPLOYMENT.md
 
-# python
-__pycache__/
-*.pyc
-.venv/
-.pytest_cache/
+# rust
+/app/target/
+Cargo.lock~
 
 # runtime
 config/

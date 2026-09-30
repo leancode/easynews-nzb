@@ -20,12 +20,16 @@ purpose: it describes a private network and must never be committed or pasted in
 - When the deployment works, update the founder's infrastructure notes as `LOCAL-DEPLOYMENT.md`
   section 5.5 says, and mark this repository's README status line as implemented.
 
-## Layout (target)
+## Layout
 
 ```
-app/            FastAPI application: newznab.py, nzb.py, sab.py, health.py, easynews.py, jobs.py, state.py
-Dockerfile      python:3.12-slim, non-root user, uvicorn on 8090
+app/            Rust crate (axum + tokio + reqwest, no database), src/: main.rs, config.rs, models.rs,
+                state.rs, easynews.rs, newznab.rs, nzb.rs, sab.rs, jobs.rs, api.rs, health.rs, xml.rs.
+                Unit tests live next to the code (#[cfg(test)] modules) with synthetic, masked
+                Easynews-shaped fixtures; no live calls in CI.
+Dockerfile      multi-stage: rust:1-alpine builds a static x86_64-unknown-linux-musl binary, shipped
+                in gcr.io/distroless/static-debian12:nonroot (non-root, no shell, no package manager);
+                listens on 8090.
 docker-compose.example.yml
 docs/DESIGN.md
-tests/          unit tests with recorded (masked) Easynews responses; no live calls in CI
 ```
