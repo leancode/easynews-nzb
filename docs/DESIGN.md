@@ -81,6 +81,8 @@ Configuration by environment variables:
 | `SAB_URL`, `SAB_API_KEY` | optional real SABnzbd to front (`http://sabnzbd:8080`) |
 | `INCOMPLETE_DIR`, `COMPLETE_DIR` | where downloads go; `COMPLETE_DIR/<category>/<release>/` is what the apps import from and must be the same path in every container |
 | `STATE_FILE` | JSON state (tickets, jobs), default `/config/state.json`, rewritten atomically |
+| `PORT` | listen port, default `8090` |
+| `UMASK` | octal, default `002`; applied once at startup before any file is created |
 
 Run as the same uid as the owner of the download folders. Tickets live 48 hours.
 

@@ -18,6 +18,8 @@ services:
       - INCOMPLETE_DIR=/downloads/incomplete
       - COMPLETE_DIR=/downloads/complete
       - STATE_FILE=/config/state.json
+      # - PORT=8090
+      # - UMASK=002
     volumes:
       - ./config:/config
       - ./downloads:/downloads
