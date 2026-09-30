@@ -31,11 +31,7 @@ fn mask_apikey(uri: &str) -> String {
         .find('&')
         .map(|i| value_start + i)
         .unwrap_or(uri.len());
-    format!(
-        "{}apikey=REDACTED{}",
-        &uri[..value_start],
-        &uri[value_end..]
-    )
+    format!("{}REDACTED{}", &uri[..value_start], &uri[value_end..])
 }
 
 async fn log_requests(req: Request, next: Next) -> Response {
