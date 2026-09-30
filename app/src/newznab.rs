@@ -73,16 +73,28 @@ impl Release {
 }
 
 /// The Easynews `gps` query terms and `fty[]` type filter to use for this search mode.
+/// Easynews has no "browse latest" query; it returns a plain-text "No search" for a blank `gps`.
+/// Prowlarr (and the apps it syncs to) validate a newly added indexer with a blank-query test per
+/// search type and expect a non-empty result, so a genuinely blank query term falls back to the
+/// current year — virtually guaranteed to match something — rather than a term Easynews rejects.
+fn non_blank(term: String) -> String {
+    if term.trim().is_empty() {
+        chrono::Utc::now().format("%Y").to_string()
+    } else {
+        term
+    }
+}
+
 pub fn easynews_query(mode: &SearchMode, q: Option<&str>) -> (Vec<String>, Vec<&'static str>) {
     match mode {
-        SearchMode::Search => (vec![q.unwrap_or("").to_string()], vec![]),
+        SearchMode::Search => (vec![non_blank(q.unwrap_or("").to_string())], vec![]),
         SearchMode::Movie { year } => {
             let mut terms = q.unwrap_or("").to_string();
             if let Some(y) = year {
                 terms.push(' ');
                 terms.push_str(y);
             }
-            (vec![terms], vec!["VIDEO"])
+            (vec![non_blank(terms)], vec!["VIDEO"])
         }
         SearchMode::TvSearch { season, ep } => {
             let base = q.unwrap_or("");
@@ -91,7 +103,7 @@ pub fn easynews_query(mode: &SearchMode, q: Option<&str>) -> (Vec<String>, Vec<&
                 candidates.push(format!("{base} S{s:02}E{e:02}"));
                 candidates.push(format!("{base} {s}x{e:02}"));
             } else {
-                candidates.push(base.to_string());
+                candidates.push(non_blank(base.to_string()));
             }
             (candidates, vec!["VIDEO"])
         }
@@ -109,7 +121,7 @@ pub fn easynews_query(mode: &SearchMode, q: Option<&str>) -> (Vec<String>, Vec<&
             if terms.is_empty() {
                 terms = q.unwrap_or("").to_string();
             }
-            (vec![terms], vec!["AUDIO"])
+            (vec![non_blank(terms)], vec!["AUDIO"])
         }
     }
 }

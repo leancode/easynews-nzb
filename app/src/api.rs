@@ -22,6 +22,17 @@ fn xml_response(body: String) -> Response {
     resp
 }
 
+/// True when a `cat` query value names only TV categories (5xxx), so a plain search known to be
+/// blank can be probed with a TV-shaped term instead of the generic fallback.
+fn only_tv_categories(cat: Option<&String>) -> bool {
+    let Some(cat) = cat else { return false };
+    let ids: Vec<u32> = cat
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    !ids.is_empty() && ids.iter().all(|id| (5000..6000).contains(id))
+}
+
 fn error_xml(message: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?><error code="100" description="{}"/>"#,
@@ -64,7 +75,21 @@ pub async fn search(
     };
 
     let q_term = q.get("q").cloned();
-    let (queries, types) = easynews_query(&mode, q_term.as_deref());
+    // Prowlarr (and the apps it syncs indexers to) validate a plain `t=search` with no `q` but a
+    // `cat` scoped to the app's own categories, and reject the indexer if that returns nothing in
+    // those categories. Under `t=search`, movie/TV classification is a filename heuristic
+    // (`SxxEyy`), so the generic blank-query fallback (the current year) rarely lands in the TV
+    // categories by chance. When the request is blank and scoped to TV-only categories, probe
+    // with an episode-shaped term instead so real results land where they're expected to.
+    let effective_q = if matches!(mode, SearchMode::Search)
+        && q_term.as_deref().map(str::trim).unwrap_or("").is_empty()
+        && only_tv_categories(q.get("cat"))
+    {
+        Some("S01E01".to_string())
+    } else {
+        q_term.clone()
+    };
+    let (queries, types) = easynews_query(&mode, effective_q.as_deref());
     let limit: usize = q
         .get("limit")
         .and_then(|s| s.parse().ok())
