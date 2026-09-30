@@ -1,0 +1,17 @@
+# private deployment notes (home network specifics)
+LOCAL-DEPLOYMENT.md
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# runtime
+config/
+state.json
+*.env
+
+# editors
+.idea/
+.vscode/
