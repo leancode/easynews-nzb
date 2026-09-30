@@ -48,11 +48,13 @@ will use to reach this service.
 
 ## Status
 
-Implemented in Rust; builds as a single static binary and a container image. See `docs/DESIGN.md`
-for the full specification: the verified Easynews API (search parameters, result fields, download
-URL forms), the exact Newznab and SABnzbd shapes the apps rely on, the ticket NZB, the download job
-model, and the test plan. Deployment against a real Prowlarr/Radarr/Sonarr/SABnzbd stack is tracked
-separately and not yet verified end-to-end.
+Implemented in Rust and verified live end-to-end: real Newznab searches and ticket NZBs, a real
+SABnzbd instance fronted correctly in both directions (Easynews tickets handled locally, everything
+else forwarded unchanged), and real film, TV episode, and music grabs through Prowlarr/Radarr/Sonarr
+each downloaded via Easynews and imported successfully. See `docs/DESIGN.md` for the full
+specification: the verified Easynews API (search parameters, result fields, download URL forms), the
+exact Newznab and SABnzbd shapes the apps rely on, the ticket NZB, the download job model, and the
+test plan.
 
 ## Requirements
 
