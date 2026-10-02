@@ -150,9 +150,17 @@ pub fn easynews_query(mode: &SearchMode, q: Option<&str>) -> (Vec<String>, Vec<&
     }
 }
 
-/// Ebooks run a few hundred KB to a few MB — far under the 5 MB floor that weeds out junk
-/// video/audio posts — so just reject anything implausibly small (an empty or corrupt post).
-const MIN_BOOK_SIZE: u64 = 10 * 1024;
+/// A real epub ranges from well under 100 KB (a short story) to a few MB; this just needs to be
+/// above throwaway test-fixture-sized stubs, not a real quality floor.
+const MIN_BOOK_SIZE: u64 = 100 * 1024;
+/// Below a typical short/lower-bitrate track (e.g. "Stay" by Maurice Williams, ~1:38) but still
+/// well above a corrupt or mislabeled post.
+const MIN_AUDIO_SIZE: u64 = 3 * 1024 * 1024;
+/// A full-length film below this is almost certainly a sample, trailer, or very low quality rip.
+const MIN_MOVIE_SIZE: u64 = 200 * 1024 * 1024;
+/// Lower than the movie floor: modern x265 encodes a TV episode noticeably smaller than x264 for
+/// the same visual quality, so a legitimate, efficiently-encoded episode can land under 200 MB.
+const MIN_TV_SIZE: u64 = 150 * 1024 * 1024;
 
 fn is_junk(f: &EasynewsFile, mode: &SearchMode) -> bool {
     if f.passwd || f.virus {
@@ -168,7 +176,14 @@ fn is_junk(f: &EasynewsFile, mode: &SearchMode) -> bool {
             || !f.extension.eq_ignore_ascii_case(".epub")
             || f.size < MIN_BOOK_SIZE
     } else {
-        (f.file_type != "VIDEO" && f.file_type != "AUDIO") || f.size < 5 * 1024 * 1024
+        match f.file_type.as_str() {
+            // Movie-vs-TV isn't known yet here (it depends on the search mode, or a filename
+            // heuristic under plain search) — the matching floor is applied once that's resolved,
+            // in build_releases' video loop.
+            "VIDEO" => false,
+            "AUDIO" => f.size < MIN_AUDIO_SIZE,
+            _ => true,
+        }
     }
 }
 
@@ -305,11 +320,11 @@ pub fn build_releases(mode: &SearchMode, query: &str, files: Vec<EasynewsFile>) 
             SearchMode::Music { .. } | SearchMode::Book { .. } => continue,
             SearchMode::Search => looks_like_tv(&f.file_name),
         };
+        if f.size < if is_tv { MIN_TV_SIZE } else { MIN_MOVIE_SIZE } {
+            continue;
+        }
         match mode {
             SearchMode::Movie { year } => {
-                if f.size < 300 * 1024 * 1024 {
-                    continue;
-                }
                 if let Some(y) = year
                     && !f.file_name.contains(y.as_str())
                 {
@@ -317,9 +332,6 @@ pub fn build_releases(mode: &SearchMode, query: &str, files: Vec<EasynewsFile>) 
                 }
             }
             SearchMode::TvSearch { season, ep } => {
-                if f.size < 100 * 1024 * 1024 {
-                    continue;
-                }
                 if let (Some(s), Some(e)) = (season, ep)
                     && !matches_episode(&f.file_name, *s, *e)
                 {

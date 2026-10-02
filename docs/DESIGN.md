@@ -102,27 +102,31 @@ Prowlarr caches caps per indexer; after a change, edit and save the indexer to r
 | Newznab call | Easynews query | type filter | post-filter |
 |---|---|---|---|
 | `t=search&q=` | `q` | none | none |
-| `t=movie&q=&year=` | `q year` | VIDEO | size >= 300 MB; name contains the year when given |
-| `t=tvsearch&q=&season=&ep=` | `q S{season:02d}E{ep:02d}`, then `q {season}x{ep:02d}` if empty | VIDEO | name matches the episode pattern; size >= 100 MB; season packs out of scope |
+| `t=movie&q=&year=` | `q year` | VIDEO | size >= 200 MB; name contains the year when given |
+| `t=tvsearch&q=&season=&ep=` | `q S{season:02d}E{ep:02d}`, then `q {season}x{ep:02d}` if empty | VIDEO | name matches the episode pattern; size >= 150 MB; season packs out of scope |
 | `t=music&artist=&album=` (or `q`) | `artist album` | AUDIO | group by `setid` into one release per set |
-| `t=book&author=&title=` (or `q`) | `author title` | DOCUMENT | extension must be `.epub`; size >= 10 KB |
+| `t=book&author=&title=` (or `q`) | `author title` | DOCUMENT | extension must be `.epub`; size >= 100 KB |
 
 Drop items with `passwd` or `virus` true, names containing `sample`, and (outside book search) sizes
-under 5 MB or IMAGE/OTHER types. Honour `cat` (comma list), `limit` (page size) and `offset` (page).
+under the type's floor (movie 200 MB, TV 150 MB, audio 3 MB) or IMAGE/OTHER types. Honour `cat`
+(comma list), `limit` (page size) and `offset` (page).
 
 ### 3.3 Releases and tickets
 
 - **Video**: one release per file. Title = `fn`, size = `rawSize`, category from `fullres` (height
   >= 2000 -> 2045/5045, >= 700 -> 2040/5040, else 2030/5030) and the search mode (movie -> 2000s,
-  tv -> 5000s; plain search: an `SxxEyy` in the name means TV, else movie).
+  tv -> 5000s; plain search: an `SxxEyy` in the name means TV, else movie). The movie/TV size floor
+  (200 MB / 150 MB) is applied once that classification is resolved, so plain search uses the same
+  floors as the dedicated modes rather than a separate generic one. TV's floor is lower than movies'
+  because modern x265 encodes a legitimate episode noticeably smaller than x264 at the same quality.
 - **Audio**: group by `setid` (fallback: poster plus the file-name prefix up to the last ` - `).
   One release per group: title = common prefix of the names with trailing separators and track
   numbers stripped, size = sum, category 3040 if any `.flac` else 3010, file list kept in the ticket.
   A group of one file is a single, which is a valid release.
 - **Books**: one release per file (Easynews posts ebooks individually, not grouped), category 7020,
   only `.epub` files kept (Easynews' `DOCUMENT` type also covers pdf/mobi/azw3/comics/etc., which
-  this project doesn't try to sort out) above a 10 KB floor (real epubs run a few hundred KB to a
-  few MB — far under the 5 MB video/audio junk floor, which does not apply here).
+  this project deliberately doesn't try to sort out) above a 100 KB floor — high enough to exclude
+  tiny test-fixture-sized stubs, well under any real short story or novella.
 - Skip groups whose file names share no letters with the query (obfuscated sets).
 - Ticket token = first 24 hex chars of sha1 over the sorted file hashes. Stored:
   `{name, category, files:[{hash, extension, fn, size, sig}], created}`. `guid` and `link` are
@@ -213,7 +217,7 @@ another indexer still going through the real SABnzbd.
 - `storage` in history is what the apps import from; it must be the path as they see it.
 - Prowlarr's indexer test performs a real search; the search must already return results.
 - Obfuscated posts: show and match on `fn`, not `subject`.
-- Junk thresholds: films under 300 MB, episodes under 100 MB, audio files under 5 MB, ebooks under
-  10 KB (the 5 MB video/audio floor would reject nearly every real epub, which typically run a few
-  hundred KB to a few MB).
+- Junk thresholds: films under 200 MB, episodes under 150 MB, audio files under 3 MB, ebooks under
+  100 KB. Each type has its own floor — a blanket one would either reject real short/efficiently
+  encoded files (audio, TV) or admit junk (ebooks are KB-sized, nowhere near a video/audio floor).
 - If the real SABnzbd is down, serve the cached `get_config` so Easynews jobs keep flowing.
