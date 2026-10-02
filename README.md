@@ -37,7 +37,7 @@ Without a real SABnzbd, easynews-nzb runs alone and simply answers "nothing else
 
 | Path | Role |
 |---|---|
-| `/api` | Newznab: `t=caps`, `t=search`, `t=tvsearch`, `t=movie`, `t=music` |
+| `/api` | Newznab: `t=caps`, `t=search`, `t=tvsearch`, `t=movie`, `t=music`, `t=book` (epub only) |
 | `/api/nzb/{ticket}` | The NZB for a search result (a ticket, see the design document) |
 | `/sab/api` | SABnzbd-compatible API: `version`, `get_config`, `get_cats`, `addfile`, `addurl`, `queue`, `history`, deletes, pause/resume |
 | `/health` | Status JSON |
@@ -133,12 +133,12 @@ cargo build --release --target x86_64-unknown-linux-musl
 ## Point your apps at it
 
 - **Prowlarr**: Indexers → Add Indexer → "Generic Newznab". URL is your `PUBLIC_URL`, API path
-  `/api`, API key your `API_KEY`. Test, then Save — Prowlarr syncs it to any connected Radarr/Sonarr
-  automatically.
-- **Radarr / Sonarr**: Settings → Download Clients → Add → SABnzbd. Host and port from
-  `PUBLIC_URL`, URL base `/sab`, API key your `API_KEY`.
-- **Anything else with a SABnzbd-compatible client field** (LazyLibrarian, Lidarr, Readarr, ...):
-  same idea — host, port, URL base `/sab`, your `API_KEY`.
+  `/api`, API key your `API_KEY`, categories Movies + TV + Audio + Books as you need them. Test,
+  then Save — Prowlarr syncs it to any connected Radarr/Sonarr/Readarr/Lidarr automatically.
+- **Radarr / Sonarr / Readarr / Lidarr**: Settings → Download Clients → Add → SABnzbd. Host and
+  port from `PUBLIC_URL`, URL base `/sab`, API key your `API_KEY`.
+- **Anything else with a SABnzbd-compatible client field**: same idea — host, port, URL base
+  `/sab`, your `API_KEY`.
 
 ## Legal
 

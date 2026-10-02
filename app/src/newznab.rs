@@ -15,7 +15,7 @@ pub const CAPS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <tv-search available="yes" supportedParams="q,season,ep"/>
     <movie-search available="yes" supportedParams="q,year"/>
     <music-search available="yes" supportedParams="q,artist,album"/>
-    <book-search available="no" supportedParams=""/>
+    <book-search available="yes" supportedParams="q,author,title"/>
   </searching>
   <categories>
     <category id="2000" name="Movies">
@@ -31,6 +31,9 @@ pub const CAPS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <category id="3000" name="Audio">
       <subcat id="3010" name="Audio/MP3"/>
       <subcat id="3040" name="Audio/Lossless"/>
+    </category>
+    <category id="7000" name="Books">
+      <subcat id="7020" name="Books/EBook"/>
     </category>
   </categories>
 </caps>
@@ -48,6 +51,10 @@ pub enum SearchMode {
     Music {
         artist: Option<String>,
         album: Option<String>,
+    },
+    Book {
+        author: Option<String>,
+        title: Option<String>,
     },
 }
 
@@ -67,6 +74,7 @@ impl Release {
             2030 | 2040 | 2045 => "Movies",
             5030 | 5040 | 5045 => "TV",
             3010 | 3040 => "Audio",
+            7020 => "Books",
             _ => "Other",
         }
     }
@@ -123,23 +131,45 @@ pub fn easynews_query(mode: &SearchMode, q: Option<&str>) -> (Vec<String>, Vec<&
             }
             (vec![non_blank(terms)], vec!["AUDIO"])
         }
+        SearchMode::Book { author, title } => {
+            let mut terms = String::new();
+            if let Some(a) = author {
+                terms.push_str(a);
+            }
+            if let Some(t) = title {
+                if !terms.is_empty() {
+                    terms.push(' ');
+                }
+                terms.push_str(t);
+            }
+            if terms.is_empty() {
+                terms = q.unwrap_or("").to_string();
+            }
+            (vec![non_blank(terms)], vec!["DOCUMENT"])
+        }
     }
 }
 
-fn is_junk(f: &EasynewsFile) -> bool {
+/// Ebooks run a few hundred KB to a few MB — far under the 5 MB floor that weeds out junk
+/// video/audio posts — so just reject anything implausibly small (an empty or corrupt post).
+const MIN_BOOK_SIZE: u64 = 10 * 1024;
+
+fn is_junk(f: &EasynewsFile, mode: &SearchMode) -> bool {
     if f.passwd || f.virus {
-        return true;
-    }
-    if f.size < 5 * 1024 * 1024 {
         return true;
     }
     if f.file_name.to_lowercase().contains("sample") {
         return true;
     }
-    if f.file_type != "VIDEO" && f.file_type != "AUDIO" {
-        return true;
+    if matches!(mode, SearchMode::Book { .. }) {
+        // Only epub: Easynews' DOCUMENT type also covers pdf/mobi/azw3/comics/etc, which this
+        // project deliberately doesn't try to sort out.
+        f.file_type != "DOCUMENT"
+            || !f.extension.eq_ignore_ascii_case(".epub")
+            || f.size < MIN_BOOK_SIZE
+    } else {
+        (f.file_type != "VIDEO" && f.file_type != "AUDIO") || f.size < 5 * 1024 * 1024
     }
-    false
 }
 
 fn parse_height(fullres: &str) -> Option<u32> {
@@ -244,7 +274,24 @@ fn longest_common_prefix<'a>(names: impl Iterator<Item = &'a str>) -> String {
 
 /// Build releases from a filtered set of Easynews search results, per docs/DESIGN.md section 3.3.
 pub fn build_releases(mode: &SearchMode, query: &str, files: Vec<EasynewsFile>) -> Vec<Release> {
-    let candidates: Vec<EasynewsFile> = files.into_iter().filter(|f| !is_junk(f)).collect();
+    let candidates: Vec<EasynewsFile> = files.into_iter().filter(|f| !is_junk(f, mode)).collect();
+
+    if matches!(mode, SearchMode::Book { .. }) {
+        // One release per file, same as video: Easynews posts ebooks individually.
+        return candidates
+            .into_iter()
+            .map(|f| Release {
+                title: f.file_name.clone(),
+                category: 7020,
+                size: f.size,
+                timestamp: f.timestamp,
+                poster: f.poster.clone(),
+                group: f.groups.first().cloned().unwrap_or_default(),
+                files: vec![to_ticket_file(&f)],
+            })
+            .collect();
+    }
+
     let mut releases = Vec::new();
 
     let (video, audio): (Vec<_>, Vec<_>) =
@@ -255,7 +302,7 @@ pub fn build_releases(mode: &SearchMode, query: &str, files: Vec<EasynewsFile>) 
         let is_tv = match mode {
             SearchMode::Movie { .. } => false,
             SearchMode::TvSearch { .. } => true,
-            SearchMode::Music { .. } => continue,
+            SearchMode::Music { .. } | SearchMode::Book { .. } => continue,
             SearchMode::Search => looks_like_tv(&f.file_name),
         };
         match mode {
@@ -527,6 +574,48 @@ mod tests {
         assert_eq!(releases[0].category, 3040);
         assert_eq!(releases[0].files.len(), 2);
         assert_eq!(releases[0].size, 82_000_000);
+    }
+
+    /// Shaped like a real Easynews DOCUMENT response (verified 2026-10-02): small epub files,
+    /// plus a non-epub document and an undersized one that must both be dropped.
+    fn book_search_fixture() -> serde_json::Value {
+        json!({
+            "data": [
+                {
+                    "0": "bb110001", "10": "King of Pride - Ana Huang", "11": ".epub",
+                    "rawSize": 1_968_470u64, "ts": 1_700_000_000i64, "7": "poster3",
+                    "type": "DOCUMENT", "passwd": false, "virus": false, "sig": "b1",
+                },
+                {
+                    "0": "bb110002", "10": "King of Wrath - Ana Huang", "11": ".epub",
+                    "rawSize": 754_935u64, "ts": 1_700_000_000i64, "7": "poster3",
+                    "type": "DOCUMENT", "passwd": false, "virus": false, "sig": "b2",
+                },
+                {
+                    "0": "bb110003", "10": "King of Wrath - Ana Huang", "11": ".pdf",
+                    "rawSize": 2_000_000u64, "ts": 1_700_000_000i64, "7": "poster3",
+                    "type": "DOCUMENT", "passwd": false, "virus": false, "sig": "b3",
+                },
+                {
+                    "0": "bb110004", "10": "corrupt-empty-post", "11": ".epub",
+                    "rawSize": 100u64, "ts": 1_700_000_000i64, "7": "poster3",
+                    "type": "DOCUMENT", "passwd": false, "virus": false, "sig": "b4",
+                },
+            ],
+        })
+    }
+
+    #[test]
+    fn book_search_keeps_only_epub_above_the_size_floor() {
+        let resp = SearchResponse::from_json(&book_search_fixture()).unwrap();
+        let mode = SearchMode::Book {
+            author: Some("Ana Huang".into()),
+            title: None,
+        };
+        let releases = build_releases(&mode, "Ana Huang", resp.data);
+        assert_eq!(releases.len(), 2, "pdf and undersized epub must be dropped");
+        assert!(releases.iter().all(|r| r.category == 7020));
+        assert!(releases.iter().all(|r| r.files.len() == 1));
     }
 
     #[test]

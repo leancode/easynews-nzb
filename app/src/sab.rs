@@ -93,7 +93,7 @@ async fn handle_cacheable(state: &Arc<AppState>, mode: &str, cache_field: &str) 
         }
     }
     if mode == "get_cats" {
-        Json(json!({"categories": ["*", "movies", "tv", "music"]})).into_response()
+        Json(json!({"categories": ["*", "movies", "tv", "music", "books"]})).into_response()
     } else {
         Json(standalone_config(state)).into_response()
     }
@@ -108,6 +108,7 @@ fn standalone_config(state: &Arc<AppState>) -> Value {
                 {"name": "movies", "priority": 0, "dir": "movies"},
                 {"name": "tv", "priority": 0, "dir": "tv"},
                 {"name": "music", "priority": 0, "dir": "music"},
+                {"name": "books", "priority": 0, "dir": "books"},
             ],
         }
     })

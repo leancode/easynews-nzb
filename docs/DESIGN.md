@@ -3,7 +3,8 @@
 One Rust process (axum + tokio + reqwest, no database), compiled as a single static
 `x86_64-unknown-linux-musl` binary, that is a Newznab indexer and a SABnzbd-compatible download
 client, backed by Easynews' members-only search and download endpoints. Everything in section 1 was
-verified against a live account on 2026-09-30.
+verified against a live account on 2026-09-30 (`DOCUMENT`/ebook support added and verified
+2026-10-02).
 
 ## 1. Easynews API
 
@@ -22,7 +23,7 @@ Always send a `User-Agent` such as `easynews-nzb/1.0`.
 | `pno` | page number, 1-based |
 | `st` | `adv` |
 | `sS` | `0` = JSON (`5` = RSS, not useful here) |
-| `fty[]` | type filter, repeatable: `VIDEO`, `AUDIO`, `IMAGE`, `OTHER` |
+| `fty[]` | type filter, repeatable: `VIDEO`, `AUDIO`, `IMAGE`, `DOCUMENT`, `OTHER` |
 | `fex` | extension filter such as `mkv` (optional; test before relying on it) |
 
 Top-level response keys: `sid` (session download token, valid for hours), `results` (total),
@@ -41,7 +42,7 @@ Each `data` item carries Easynews' numeric column ids and named duplicates; use 
 | `6` / `subject` | subject (often obfuscated) |
 | `7` / `poster` | poster |
 | `9` / `groups`, `group_list` | newsgroup(s) |
-| `type` | `VIDEO`, `AUDIO`, `IMAGE`, `OTHER` |
+| `type` | `VIDEO`, `AUDIO`, `IMAGE`, `DOCUMENT`, `OTHER` |
 | `vcodec`, `acodec`, `fullres`, `runtime` (seconds), `bps`, `hz`, `alangs`, `slangs` | media info |
 | `setid` / `colid` | the post set the file belongs to; files of one album or season share it |
 | `passwd` / `password`, `virus` | skip the file when either is true |
@@ -92,9 +93,9 @@ Run as the same uid as the owner of the download folders. Tickets live 48 hours.
 
 Standard caps XML: `<server>`, `<limits max="100" default="50"/>`, `<searching>` with `search`,
 `tv-search` (`q,season,ep`), `movie-search` (`q,year`), `music-search` (`q,artist,album`),
-`book-search` unavailable, and a `<categories>` tree: 2000 Movies (2030 SD, 2040 HD, 2045 UHD),
-5000 TV (5030 SD, 5040 HD, 5045 UHD), 3000 Audio (3010 MP3, 3040 Lossless). Prowlarr caches caps
-per indexer; after a change, edit and save the indexer to refresh.
+`book-search` (`q,author,title`), and a `<categories>` tree: 2000 Movies (2030 SD, 2040 HD, 2045 UHD),
+5000 TV (5030 SD, 5040 HD, 5045 UHD), 3000 Audio (3010 MP3, 3040 Lossless), 7000 Books (7020 EBook).
+Prowlarr caches caps per indexer; after a change, edit and save the indexer to refresh.
 
 ### 3.2 Query mapping
 
@@ -104,9 +105,10 @@ per indexer; after a change, edit and save the indexer to refresh.
 | `t=movie&q=&year=` | `q year` | VIDEO | size >= 300 MB; name contains the year when given |
 | `t=tvsearch&q=&season=&ep=` | `q S{season:02d}E{ep:02d}`, then `q {season}x{ep:02d}` if empty | VIDEO | name matches the episode pattern; size >= 100 MB; season packs out of scope |
 | `t=music&artist=&album=` (or `q`) | `artist album` | AUDIO | group by `setid` into one release per set |
+| `t=book&author=&title=` (or `q`) | `author title` | DOCUMENT | extension must be `.epub`; size >= 10 KB |
 
-Drop items with `passwd` or `virus` true, sizes under 5 MB, names containing `sample`, and IMAGE or
-OTHER types. Honour `cat` (comma list), `limit` (page size) and `offset` (page).
+Drop items with `passwd` or `virus` true, names containing `sample`, and (outside book search) sizes
+under 5 MB or IMAGE/OTHER types. Honour `cat` (comma list), `limit` (page size) and `offset` (page).
 
 ### 3.3 Releases and tickets
 
@@ -117,6 +119,10 @@ OTHER types. Honour `cat` (comma list), `limit` (page size) and `offset` (page).
   One release per group: title = common prefix of the names with trailing separators and track
   numbers stripped, size = sum, category 3040 if any `.flac` else 3010, file list kept in the ticket.
   A group of one file is a single, which is a valid release.
+- **Books**: one release per file (Easynews posts ebooks individually, not grouped), category 7020,
+  only `.epub` files kept (Easynews' `DOCUMENT` type also covers pdf/mobi/azw3/comics/etc., which
+  this project doesn't try to sort out) above a 10 KB floor (real epubs run a few hundred KB to a
+  few MB — far under the 5 MB video/audio junk floor, which does not apply here).
 - Skip groups whose file names share no letters with the query (obfuscated sets).
 - Ticket token = first 24 hex chars of sha1 over the sorted file hashes. Stored:
   `{name, category, files:[{hash, extension, fn, size, sig}], created}`. `guid` and `link` are
@@ -188,17 +194,18 @@ With `KEY` = the configured API key and the service on `127.0.0.1:8090`:
 1. `t=caps` returns the XML.
 2. `t=movie&q=<film>&year=<year>` returns items with sizes and `application/x-nzb` enclosures.
 3. `t=music&artist=<artist>&album=<album>` returns at least one release.
-4. Fetching a `link` returns the ticket NZB.
-5. `/sab/api?mode=version`, `get_config`, `queue`, `history` match SABnzbd's shapes.
-6. Posting the NZB with `mode=addfile` and `cat=music` answers an `ez_` id; the job appears in
+4. `t=book&author=<author>` returns only `.epub` releases.
+5. Fetching a `link` returns the ticket NZB.
+6. `/sab/api?mode=version`, `get_config`, `queue`, `history` match SABnzbd's shapes.
+7. Posting the NZB with `mode=addfile` and `cat=music` answers an `ez_` id; the job appears in
    `queue`, then in `history` as Completed; the files sit under `COMPLETE_DIR/music/<folder>/`;
    `history&name=delete&del_files=1` removes them.
-7. When fronting: posting a genuine NZB must land in the real SABnzbd and appear in the merged history.
+8. When fronting: posting a genuine NZB must land in the real SABnzbd and appear in the merged history.
 
 Then in the apps: Prowlarr "Generic Newznab" with `PUBLIC_URL`, API path `/api`, the key, Movies +
-TV + Audio categories; the apps' SABnzbd client pointed at the service with URL base `/sab`; one
-film, one episode and one album grabbed through Easynews and imported; one grab from another indexer
-still going through the real SABnzbd.
+TV + Audio + Books categories; the apps' SABnzbd client pointed at the service with URL base `/sab`;
+one film, one episode, one album and one ebook grabbed through Easynews and imported; one grab from
+another indexer still going through the real SABnzbd.
 
 ## 8. Gotchas
 
@@ -206,5 +213,7 @@ still going through the real SABnzbd.
 - `storage` in history is what the apps import from; it must be the path as they see it.
 - Prowlarr's indexer test performs a real search; the search must already return results.
 - Obfuscated posts: show and match on `fn`, not `subject`.
-- Junk thresholds: films under 300 MB, episodes under 100 MB, audio files under 5 MB.
+- Junk thresholds: films under 300 MB, episodes under 100 MB, audio files under 5 MB, ebooks under
+  10 KB (the 5 MB video/audio floor would reject nearly every real epub, which typically run a few
+  hundred KB to a few MB).
 - If the real SABnzbd is down, serve the cached `get_config` so Easynews jobs keep flowing.

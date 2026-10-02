@@ -71,6 +71,10 @@ pub async fn search(
             artist: q.get("artist").cloned().filter(|s| !s.is_empty()),
             album: q.get("album").cloned().filter(|s| !s.is_empty()),
         },
+        "book" => SearchMode::Book {
+            author: q.get("author").cloned().filter(|s| !s.is_empty()),
+            title: q.get("title").cloned().filter(|s| !s.is_empty()),
+        },
         _ => SearchMode::Search,
     };
 
