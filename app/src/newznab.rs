@@ -107,11 +107,16 @@ pub fn easynews_query(mode: &SearchMode, q: Option<&str>) -> (Vec<String>, Vec<&
         SearchMode::TvSearch { season, ep } => {
             let base = q.unwrap_or("");
             let mut candidates = Vec::new();
-            if let (Some(s), Some(e)) = (season, ep) {
-                candidates.push(format!("{base} S{s:02}E{e:02}"));
-                candidates.push(format!("{base} {s}x{e:02}"));
-            } else {
-                candidates.push(non_blank(base.to_string()));
+            match (season, ep) {
+                (Some(s), Some(e)) => {
+                    candidates.push(format!("{base} S{s:02}E{e:02}"));
+                    candidates.push(format!("{base} {s}x{e:02}"));
+                }
+                // A season search with no episode number: Sonarr wants a season pack. Easynews
+                // posts each episode as its own file but shares a `setid` across a season, so
+                // search broadly for the season and group matching files in build_releases.
+                (Some(s), None) => candidates.push(format!("{base} S{s:02}")),
+                _ => candidates.push(non_blank(base.to_string())),
             }
             (candidates, vec!["VIDEO"])
         }
@@ -262,6 +267,43 @@ fn matches_episode(name: &str, season: u32, ep: u32) -> bool {
     upper.contains(&format!("S{season:02}E{ep:02}")) || upper.contains(&format!("{season}X{ep:02}"))
 }
 
+fn matches_season(name: &str, season: u32) -> bool {
+    name.to_uppercase().contains(&format!("S{season:02}"))
+}
+
+/// A reasonable "Show Name S01"-shaped title for a season-pack release, derived from the longest
+/// common prefix of the group's file names (which — for a real set of per-episode files — usually
+/// extends up to where the episode number diverges) truncated right after the season marker, so
+/// Sonarr's own release-title parser reads it as a full season rather than a single episode.
+fn season_pack_title(files: &[&EasynewsFile], season: u32, query: &str) -> String {
+    let marker = format!("S{season:02}");
+    let prefix = longest_common_prefix(files.iter().map(|f| f.file_name.as_str()));
+    if let Some(idx) = prefix.to_uppercase().find(&marker) {
+        // Many real uploads name individual episode files without repeating the show (just
+        // "S01E01.mkv" in a show-named folder), so the common prefix can be the season marker
+        // itself with nothing meaningful before it — not a usable title on its own.
+        let before = prefix[..idx].trim_matches(|c: char| !c.is_alphanumeric());
+        if !before.is_empty() {
+            let end = idx + marker.len();
+            let title = prefix[..end].trim_end_matches(['.', '-', '_', ' ']);
+            if !title.is_empty() {
+                return title.to_string();
+            }
+        }
+    }
+    // Fall back to what was actually searched for — the show name Sonarr sent — rather than an
+    // uninformative filename-derived fragment. `query` is the Easynews search term, which for a
+    // season search already ends in the season marker (see `easynews_query`), so don't double it.
+    let query = query.trim();
+    if query.is_empty() {
+        files[0].file_name.clone()
+    } else if query.to_uppercase().contains(&marker) {
+        query.to_string()
+    } else {
+        format!("{query} {marker}")
+    }
+}
+
 fn shares_letters(a: &str, b: &str) -> bool {
     if b.trim().is_empty() {
         return true;
@@ -340,8 +382,53 @@ pub fn build_releases(
     let (video, audio): (Vec<_>, Vec<_>) =
         candidates.into_iter().partition(|f| f.file_type == "VIDEO");
 
-    // Video: one release per file.
+    // Season pack: a season search with no specific episode. Easynews shares one `setid` across
+    // a season's episode files (same mechanism as audio albums), so group on that; a lone file
+    // with no grouped partners just falls through to the per-file loop below as a single episode.
+    let mut packed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let SearchMode::TvSearch {
+        season: Some(season),
+        ep: None,
+    } = mode
+    {
+        let season = *season;
+        let mut groups: HashMap<String, Vec<&EasynewsFile>> = HashMap::new();
+        for f in &video {
+            if f.size < thresholds.min_tv_size || !matches_season(&f.file_name, season) {
+                continue;
+            }
+            if let Some(id) = f.setid.as_deref().filter(|id| !id.is_empty()) {
+                groups.entry(format!("setid:{id}")).or_default().push(f);
+            }
+        }
+        for files in groups.into_values() {
+            if files.len() < 2 || !files.iter().any(|f| shares_letters(&f.file_name, query)) {
+                continue;
+            }
+            for f in &files {
+                packed.insert(f.hash.clone());
+            }
+            let title = season_pack_title(&files, season, query);
+            let size: u64 = files.iter().map(|f| f.size).sum();
+            let timestamp = files.iter().map(|f| f.timestamp).max().unwrap_or(0);
+            let category = video_category(files[0].fullres.as_deref(), true);
+            releases.push(Release {
+                title,
+                category,
+                size,
+                timestamp,
+                poster: files[0].poster.clone(),
+                group: files[0].groups.first().cloned().unwrap_or_default(),
+                files: files.iter().map(|f| to_ticket_file(f)).collect(),
+            });
+        }
+    }
+
+    // Video: one release per file (per-episode singles, and anything not folded into a pack above).
     for f in video {
+        if packed.contains(&f.hash) {
+            continue;
+        }
         let is_tv = match mode {
             SearchMode::Movie { .. } => false,
             SearchMode::TvSearch { .. } => true,
@@ -364,13 +451,11 @@ pub fn build_releases(
                     continue;
                 }
             }
-            SearchMode::TvSearch { season, ep } => {
-                if let (Some(s), Some(e)) = (season, ep)
-                    && !matches_episode(&f.file_name, *s, *e)
-                {
-                    continue;
-                }
-            }
+            SearchMode::TvSearch { season, ep } => match (season, ep) {
+                (Some(s), Some(e)) if !matches_episode(&f.file_name, *s, *e) => continue,
+                (Some(s), None) if !matches_season(&f.file_name, *s) => continue,
+                _ => {}
+            },
             _ => {}
         }
         let category = video_category(f.fullres.as_deref(), is_tv);
@@ -619,6 +704,117 @@ mod tests {
         assert_eq!(releases[0].category, 3040);
         assert_eq!(releases[0].files.len(), 2);
         assert_eq!(releases[0].size, 82_000_000);
+    }
+
+    fn season_pack_fixture() -> serde_json::Value {
+        json!({
+            "data": [
+                {
+                    "0": "ss110001", "10": "Some.Show.S01E01.Pilot.1080p", "11": ".mkv",
+                    "rawSize": 200_000_000u64, "ts": 1_700_000_000i64, "7": "poster4",
+                    "19": "season-set-1", "type": "VIDEO", "fullres": "1920x1080",
+                    "passwd": false, "virus": false, "sig": "ss1",
+                },
+                {
+                    "0": "ss110002", "10": "Some.Show.S01E02.Second.1080p", "11": ".mkv",
+                    "rawSize": 210_000_000u64, "ts": 1_700_000_000i64, "7": "poster4",
+                    "19": "season-set-1", "type": "VIDEO", "fullres": "1920x1080",
+                    "passwd": false, "virus": false, "sig": "ss2",
+                },
+                {
+                    "0": "ss110003", "10": "Some.Show.S01E03.Third.1080p", "11": ".mkv",
+                    "rawSize": 190_000_000u64, "ts": 1_700_000_000i64, "7": "poster4",
+                    "19": "season-set-1", "type": "VIDEO", "fullres": "1920x1080",
+                    "passwd": false, "virus": false, "sig": "ss3",
+                },
+                {
+                    "0": "ss110004", "10": "Some.Show.S02E01.Lone.Episode.1080p", "11": ".mkv",
+                    "rawSize": 200_000_000u64, "ts": 1_700_000_000i64, "7": "poster4",
+                    "type": "VIDEO", "fullres": "1920x1080",
+                    "passwd": false, "virus": false, "sig": "ss4",
+                },
+            ],
+        })
+    }
+
+    #[test]
+    fn season_search_groups_shared_setid_into_one_pack_and_leaves_singles_alone() {
+        let resp = SearchResponse::from_json(&season_pack_fixture()).unwrap();
+        let mode = SearchMode::TvSearch {
+            season: Some(1),
+            ep: None,
+        };
+        let releases = build_releases(&mode, "Some Show", resp.data, &Thresholds::default());
+        assert_eq!(
+            releases.len(),
+            1,
+            "the S02 single shouldn't match a S01 search at all"
+        );
+        assert_eq!(releases[0].files.len(), 3);
+        assert_eq!(releases[0].size, 600_000_000);
+        assert_eq!(releases[0].title, "Some.Show.S01");
+        assert_eq!(releases[0].category, 5040);
+    }
+
+    #[test]
+    fn season_pack_title_falls_back_to_query_when_filenames_omit_the_show_name() {
+        // Real-world case found live (2026-10-02): episode files inside a show-named folder,
+        // named just "S01E01.mkv" etc, with no show name of their own to derive a title from.
+        let resp = SearchResponse::from_json(&json!({
+            "data": [
+                {
+                    "0": "nn110001", "10": "S01E01", "11": ".mkv",
+                    "rawSize": 200_000_000u64, "ts": 1_700_000_000i64, "7": "poster5",
+                    "19": "bare-set-1", "type": "VIDEO", "fullres": "1920x1080",
+                    "passwd": false, "virus": false, "sig": "n1",
+                },
+                {
+                    "0": "nn110002", "10": "S01E02", "11": ".mkv",
+                    "rawSize": 210_000_000u64, "ts": 1_700_000_000i64, "7": "poster5",
+                    "19": "bare-set-1", "type": "VIDEO", "fullres": "1920x1080",
+                    "passwd": false, "virus": false, "sig": "n2",
+                },
+            ],
+        }))
+        .unwrap();
+        let mode = SearchMode::TvSearch {
+            season: Some(1),
+            ep: None,
+        };
+        let releases = build_releases(&mode, "Friends", resp.data, &Thresholds::default());
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].title, "Friends S01");
+    }
+
+    #[test]
+    fn season_pack_title_does_not_double_the_season_marker() {
+        // Regression (found live 2026-10-02): `query` passed to build_releases is the Easynews
+        // search term, which for a season search already ends in "S01" (see easynews_query) --
+        // appending the marker again produced titles like "Friends S01 S01".
+        let resp = SearchResponse::from_json(&json!({
+            "data": [
+                {
+                    "0": "qq110001", "10": "S01E01", "11": ".mkv",
+                    "rawSize": 200_000_000u64, "ts": 1_700_000_000i64, "7": "poster6",
+                    "19": "bare-set-2", "type": "VIDEO", "fullres": "1920x1080",
+                    "passwd": false, "virus": false, "sig": "q1",
+                },
+                {
+                    "0": "qq110002", "10": "S01E02", "11": ".mkv",
+                    "rawSize": 210_000_000u64, "ts": 1_700_000_000i64, "7": "poster6",
+                    "19": "bare-set-2", "type": "VIDEO", "fullres": "1920x1080",
+                    "passwd": false, "virus": false, "sig": "q2",
+                },
+            ],
+        }))
+        .unwrap();
+        let mode = SearchMode::TvSearch {
+            season: Some(1),
+            ep: None,
+        };
+        let releases = build_releases(&mode, "Friends S01", resp.data, &Thresholds::default());
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].title, "Friends S01");
     }
 
     /// Shaped like a real Easynews DOCUMENT response (verified 2026-10-02): small epub files,

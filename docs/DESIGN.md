@@ -107,7 +107,8 @@ Prowlarr caches caps per indexer; after a change, edit and save the indexer to r
 |---|---|---|---|
 | `t=search&q=` | `q` | none | none |
 | `t=movie&q=&year=` | `q year` | VIDEO | size >= 200 MB; name contains the year when given |
-| `t=tvsearch&q=&season=&ep=` | `q S{season:02d}E{ep:02d}`, then `q {season}x{ep:02d}` if empty | VIDEO | name matches the episode pattern; size >= 150 MB; season packs out of scope |
+| `t=tvsearch&q=&season=&ep=` | `q S{season:02d}E{ep:02d}`, then `q {season}x{ep:02d}` if empty | VIDEO | name matches the episode pattern; size >= 150 MB |
+| `t=tvsearch&q=&season=` (no `ep`) | `q S{season:02d}` | VIDEO | season pack: group matching files sharing a `setid`; lone files fall back to single-episode releases |
 | `t=music&artist=&album=` (or `q`) | `artist album` | AUDIO | group by `setid` into one release per set |
 | `t=book&author=&title=` (or `q`) | `author title` | DOCUMENT | extension must be `.epub`; size >= 4 KB |
 
@@ -123,6 +124,12 @@ under the type's floor (movie 200 MB, TV 150 MB, audio 3 MB) or IMAGE/OTHER type
   (200 MB / 150 MB) is applied once that classification is resolved, so plain search uses the same
   floors as the dedicated modes rather than a separate generic one. TV's floor is lower than movies'
   because modern x265 encodes a legitimate episode noticeably smaller than x264 at the same quality.
+- **Season packs**: a `t=tvsearch` with `season` but no `ep` groups matching video files (above the
+  TV floor, name contains `Sxx`) that share a `setid` into one release covering the group, title
+  derived from the files' longest common prefix truncated right after the season marker (e.g.
+  `Show.Name.S01`) so Sonarr's own parser reads it as a full season, not a single episode. A file
+  with no grouped partners isn't a pack by itself; it still comes back as an ordinary single-episode
+  release via the per-file path above.
 - **Audio**: group by `setid` (fallback: poster plus the file-name prefix up to the last ` - `).
   One release per group: title = common prefix of the names with trailing separators and track
   numbers stripped, size = sum, category 3040 if any `.flac` else 3010, file list kept in the ticket.
