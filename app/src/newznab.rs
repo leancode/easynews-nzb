@@ -150,19 +150,39 @@ pub fn easynews_query(mode: &SearchMode, q: Option<&str>) -> (Vec<String>, Vec<&
     }
 }
 
-/// A real epub ranges from well under 100 KB (a short story) to a few MB; this just needs to be
-/// above throwaway test-fixture-sized stubs, not a real quality floor.
-const MIN_BOOK_SIZE: u64 = 100 * 1024;
-/// Below a typical short/lower-bitrate track (e.g. "Stay" by Maurice Williams, ~1:38) but still
-/// well above a corrupt or mislabeled post.
-const MIN_AUDIO_SIZE: u64 = 3 * 1024 * 1024;
-/// A full-length film below this is almost certainly a sample, trailer, or very low quality rip.
-const MIN_MOVIE_SIZE: u64 = 200 * 1024 * 1024;
-/// Lower than the movie floor: modern x265 encodes a TV episode noticeably smaller than x264 for
-/// the same visual quality, so a legitimate, efficiently-encoded episode can land under 200 MB.
-const MIN_TV_SIZE: u64 = 150 * 1024 * 1024;
+/// Junk-size floors below which a result is treated as a sample, trailer, or corrupt/mislabeled
+/// post rather than a real release. All four are independently overridable (see `Config`) since
+/// what counts as "too small to be real" is a judgment call that varies by taste and by how
+/// aggressively a given Usenet group's posters compress things.
+#[derive(Debug, Clone, Copy)]
+pub struct Thresholds {
+    /// A full-length film below this is almost certainly a sample, trailer, or very low quality
+    /// rip. Default 200 MB.
+    pub min_movie_size: u64,
+    /// Lower than the movie floor on purpose: modern x265 encodes a TV episode noticeably smaller
+    /// than x264 at the same visual quality, so a legitimate, efficiently-encoded episode can land
+    /// under 200 MB. Default 150 MB.
+    pub min_tv_size: u64,
+    /// Below a typical short/lower-bitrate track (e.g. "Stay" by Maurice Williams, ~1:38) but
+    /// still well above a corrupt or mislabeled post. Default 3 MB.
+    pub min_audio_size: u64,
+    /// A real epub can be tiny — verified short-story competition winners as small as 4.8 KB are
+    /// genuine, complete books, not stubs. Default 4 KB.
+    pub min_book_size: u64,
+}
 
-fn is_junk(f: &EasynewsFile, mode: &SearchMode) -> bool {
+impl Default for Thresholds {
+    fn default() -> Self {
+        Thresholds {
+            min_movie_size: 200 * 1024 * 1024,
+            min_tv_size: 150 * 1024 * 1024,
+            min_audio_size: 3 * 1024 * 1024,
+            min_book_size: 4 * 1024,
+        }
+    }
+}
+
+fn is_junk(f: &EasynewsFile, mode: &SearchMode, thresholds: &Thresholds) -> bool {
     if f.passwd || f.virus {
         return true;
     }
@@ -174,14 +194,14 @@ fn is_junk(f: &EasynewsFile, mode: &SearchMode) -> bool {
         // project deliberately doesn't try to sort out.
         f.file_type != "DOCUMENT"
             || !f.extension.eq_ignore_ascii_case(".epub")
-            || f.size < MIN_BOOK_SIZE
+            || f.size < thresholds.min_book_size
     } else {
         match f.file_type.as_str() {
             // Movie-vs-TV isn't known yet here (it depends on the search mode, or a filename
             // heuristic under plain search) — the matching floor is applied once that's resolved,
             // in build_releases' video loop.
             "VIDEO" => false,
-            "AUDIO" => f.size < MIN_AUDIO_SIZE,
+            "AUDIO" => f.size < thresholds.min_audio_size,
             _ => true,
         }
     }
@@ -288,8 +308,16 @@ fn longest_common_prefix<'a>(names: impl Iterator<Item = &'a str>) -> String {
 }
 
 /// Build releases from a filtered set of Easynews search results, per docs/DESIGN.md section 3.3.
-pub fn build_releases(mode: &SearchMode, query: &str, files: Vec<EasynewsFile>) -> Vec<Release> {
-    let candidates: Vec<EasynewsFile> = files.into_iter().filter(|f| !is_junk(f, mode)).collect();
+pub fn build_releases(
+    mode: &SearchMode,
+    query: &str,
+    files: Vec<EasynewsFile>,
+    thresholds: &Thresholds,
+) -> Vec<Release> {
+    let candidates: Vec<EasynewsFile> = files
+        .into_iter()
+        .filter(|f| !is_junk(f, mode, thresholds))
+        .collect();
 
     if matches!(mode, SearchMode::Book { .. }) {
         // One release per file, same as video: Easynews posts ebooks individually.
@@ -320,7 +348,12 @@ pub fn build_releases(mode: &SearchMode, query: &str, files: Vec<EasynewsFile>) 
             SearchMode::Music { .. } | SearchMode::Book { .. } => continue,
             SearchMode::Search => looks_like_tv(&f.file_name),
         };
-        if f.size < if is_tv { MIN_TV_SIZE } else { MIN_MOVIE_SIZE } {
+        let min_size = if is_tv {
+            thresholds.min_tv_size
+        } else {
+            thresholds.min_movie_size
+        };
+        if f.size < min_size {
             continue;
         }
         match mode {
@@ -564,7 +597,7 @@ mod tests {
         let mode = SearchMode::Movie {
             year: Some("2011".into()),
         };
-        let releases = build_releases(&mode, "Some Movie", resp.data);
+        let releases = build_releases(&mode, "Some Movie", resp.data, &Thresholds::default());
         assert_eq!(
             releases.len(),
             1,
@@ -581,7 +614,7 @@ mod tests {
             artist: Some("Artist".into()),
             album: Some("Album".into()),
         };
-        let releases = build_releases(&mode, "Artist Album", resp.data);
+        let releases = build_releases(&mode, "Artist Album", resp.data, &Thresholds::default());
         assert_eq!(releases.len(), 1);
         assert_eq!(releases[0].category, 3040);
         assert_eq!(releases[0].files.len(), 2);
@@ -624,7 +657,7 @@ mod tests {
             author: Some("Ana Huang".into()),
             title: None,
         };
-        let releases = build_releases(&mode, "Ana Huang", resp.data);
+        let releases = build_releases(&mode, "Ana Huang", resp.data, &Thresholds::default());
         assert_eq!(releases.len(), 2, "pdf and undersized epub must be dropped");
         assert!(releases.iter().all(|r| r.category == 7020));
         assert!(releases.iter().all(|r| r.files.len() == 1));

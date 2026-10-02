@@ -121,7 +121,12 @@ pub async fn search(
     }
 
     let query_for_filter = queries.first().cloned().unwrap_or_default();
-    let mut releases = build_releases(&mode, &query_for_filter, all_files);
+    let mut releases = build_releases(
+        &mode,
+        &query_for_filter,
+        all_files,
+        &state.config.thresholds,
+    );
 
     if let Some(cat_param) = q.get("cat").filter(|s| !s.is_empty()) {
         let wanted: std::collections::HashSet<u32> = cat_param

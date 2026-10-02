@@ -77,6 +77,10 @@ Everything is configured by environment variables — there's no config file to 
 | `STATE_FILE` | no | `/config/state.json` | Where tickets and job state are persisted (plain JSON, rewritten atomically) |
 | `PORT` | no | `8090` | Port to listen on |
 | `UMASK` | no | `002` (octal) | Applied once at startup, before any file is created, so downloaded files and folders come out with consistent permissions |
+| `MIN_MOVIE_SIZE_KB` | no | `204800` (200 MB) | Results smaller than this are treated as junk (samples, trailers, bad rips) and dropped |
+| `MIN_TV_SIZE_KB` | no | `153600` (150 MB) | Same, for TV episodes. Lower than the movie default since modern x265 encodes a good episode noticeably smaller than x264 at the same quality |
+| `MIN_AUDIO_SIZE_KB` | no | `3072` (3 MB) | Same, for music. A real short or lower-bitrate track can be this small |
+| `MIN_BOOK_SIZE_KB` | no | `4` | Same, for ebooks. Real epubs can be tiny — this only filters out empty/corrupt posts, not quality |
 
 `INCOMPLETE_DIR` and `COMPLETE_DIR` must resolve to the same actual folders for both this service
 and whatever imports from them (Radarr, Sonarr, ...) — mount the same host directory into every

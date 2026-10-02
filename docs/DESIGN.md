@@ -84,6 +84,10 @@ Configuration by environment variables:
 | `STATE_FILE` | JSON state (tickets, jobs), default `/config/state.json`, rewritten atomically |
 | `PORT` | listen port, default `8090` |
 | `UMASK` | octal, default `002`; applied once at startup before any file is created |
+| `MIN_MOVIE_SIZE_KB` | junk-size floor for movies, in KB, default `204800` (200 MB) |
+| `MIN_TV_SIZE_KB` | junk-size floor for TV episodes, in KB, default `153600` (150 MB) |
+| `MIN_AUDIO_SIZE_KB` | junk-size floor for music, in KB, default `3072` (3 MB) |
+| `MIN_BOOK_SIZE_KB` | junk-size floor for ebooks, in KB, default `4` |
 
 Run as the same uid as the owner of the download folders. Tickets live 48 hours.
 
@@ -105,7 +109,7 @@ Prowlarr caches caps per indexer; after a change, edit and save the indexer to r
 | `t=movie&q=&year=` | `q year` | VIDEO | size >= 200 MB; name contains the year when given |
 | `t=tvsearch&q=&season=&ep=` | `q S{season:02d}E{ep:02d}`, then `q {season}x{ep:02d}` if empty | VIDEO | name matches the episode pattern; size >= 150 MB; season packs out of scope |
 | `t=music&artist=&album=` (or `q`) | `artist album` | AUDIO | group by `setid` into one release per set |
-| `t=book&author=&title=` (or `q`) | `author title` | DOCUMENT | extension must be `.epub`; size >= 100 KB |
+| `t=book&author=&title=` (or `q`) | `author title` | DOCUMENT | extension must be `.epub`; size >= 4 KB |
 
 Drop items with `passwd` or `virus` true, names containing `sample`, and (outside book search) sizes
 under the type's floor (movie 200 MB, TV 150 MB, audio 3 MB) or IMAGE/OTHER types. Honour `cat`
@@ -125,8 +129,9 @@ under the type's floor (movie 200 MB, TV 150 MB, audio 3 MB) or IMAGE/OTHER type
   A group of one file is a single, which is a valid release.
 - **Books**: one release per file (Easynews posts ebooks individually, not grouped), category 7020,
   only `.epub` files kept (Easynews' `DOCUMENT` type also covers pdf/mobi/azw3/comics/etc., which
-  this project deliberately doesn't try to sort out) above a 100 KB floor — high enough to exclude
-  tiny test-fixture-sized stubs, well under any real short story or novella.
+  this project deliberately doesn't try to sort out) above a 4 KB floor — real short stories can be
+  tiny (a verified competition-winning epub as small as 4.8 KB), so this only excludes empty/corrupt
+  posts, not a quality bar.
 - Skip groups whose file names share no letters with the query (obfuscated sets).
 - Ticket token = first 24 hex chars of sha1 over the sorted file hashes. Stored:
   `{name, category, files:[{hash, extension, fn, size, sig}], created}`. `guid` and `link` are
@@ -217,7 +222,8 @@ another indexer still going through the real SABnzbd.
 - `storage` in history is what the apps import from; it must be the path as they see it.
 - Prowlarr's indexer test performs a real search; the search must already return results.
 - Obfuscated posts: show and match on `fn`, not `subject`.
-- Junk thresholds: films under 200 MB, episodes under 150 MB, audio files under 3 MB, ebooks under
-  100 KB. Each type has its own floor — a blanket one would either reject real short/efficiently
-  encoded files (audio, TV) or admit junk (ebooks are KB-sized, nowhere near a video/audio floor).
+- Junk thresholds (each independently overridable, see section 2): films under 200 MB, episodes
+  under 150 MB, audio files under 3 MB, ebooks under 4 KB. Each type has its own floor — a blanket
+  one would either reject real short/efficiently encoded files (audio, TV, short-story ebooks) or
+  admit junk.
 - If the real SABnzbd is down, serve the cached `get_config` so Easynews jobs keep flowing.

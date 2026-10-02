@@ -20,6 +20,11 @@ services:
       - STATE_FILE=/config/state.json
       # - PORT=8090
       # - UMASK=002
+      # Optional: junk-size floors, in KB. Defaults match 200MB/150MB/3MB/4KB.
+      # - MIN_MOVIE_SIZE_KB=204800
+      # - MIN_TV_SIZE_KB=153600
+      # - MIN_AUDIO_SIZE_KB=3072
+      # - MIN_BOOK_SIZE_KB=4
     volumes:
       - ./config:/config
       - ./downloads:/downloads

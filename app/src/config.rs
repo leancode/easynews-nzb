@@ -1,5 +1,7 @@
 use std::env;
 
+use crate::newznab::Thresholds;
+
 #[derive(Clone)]
 pub struct Config {
     pub easynews_username: String,
@@ -13,6 +15,7 @@ pub struct Config {
     pub state_file: String,
     pub port: u16,
     pub umask: u32,
+    pub thresholds: Thresholds,
 }
 
 fn env_var(name: &str) -> Option<String> {
@@ -21,6 +24,15 @@ fn env_var(name: &str) -> Option<String> {
 
 fn require(name: &str) -> anyhow::Result<String> {
     env_var(name).ok_or_else(|| anyhow::anyhow!("missing required environment variable {name}"))
+}
+
+/// Read an env var as whole kilobytes and convert to bytes; falls back to `default_bytes` if
+/// unset or not a plain integer.
+fn env_kb_or(name: &str, default_bytes: u64) -> u64 {
+    env_var(name)
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|kb| kb * 1024)
+        .unwrap_or(default_bytes)
 }
 
 impl Config {
@@ -45,6 +57,15 @@ impl Config {
             umask: env_var("UMASK")
                 .and_then(|v| u32::from_str_radix(&v, 8).ok())
                 .unwrap_or(0o002),
+            thresholds: {
+                let defaults = Thresholds::default();
+                Thresholds {
+                    min_movie_size: env_kb_or("MIN_MOVIE_SIZE_KB", defaults.min_movie_size),
+                    min_tv_size: env_kb_or("MIN_TV_SIZE_KB", defaults.min_tv_size),
+                    min_audio_size: env_kb_or("MIN_AUDIO_SIZE_KB", defaults.min_audio_size),
+                    min_book_size: env_kb_or("MIN_BOOK_SIZE_KB", defaults.min_book_size),
+                }
+            },
         })
     }
 }
