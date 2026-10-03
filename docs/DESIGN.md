@@ -129,7 +129,12 @@ under the type's floor (movie 200 MB, TV 150 MB, audio 3 MB) or IMAGE/OTHER type
   derived from the files' longest common prefix truncated right after the season marker (e.g.
   `Show.Name.S01`) so Sonarr's own parser reads it as a full season, not a single episode. A file
   with no grouped partners isn't a pack by itself; it still comes back as an ordinary single-episode
-  release via the per-file path above.
+  release via the per-file path above. A candidate group is only accepted if at least one file
+  contains a real word (4+ letters, excluding the season marker) from the query — plain letter
+  overlap (as audio uses, see below) is far too weak here and produced a real false positive live
+  (an unrelated show matched a search purely by sharing common letters); TV release names reliably
+  include the show name whenever a file has any identifying text at all, so a group that fails this
+  is treated as unverifiable and left as separate singles rather than risk bundling the wrong show.
 - **Audio**: group by `setid` (fallback: poster plus the file-name prefix up to the last ` - `).
   One release per group: title = common prefix of the names with trailing separators and track
   numbers stripped, size = sum, category 3040 if any `.flac` else 3010, file list kept in the ticket.
@@ -139,7 +144,10 @@ under the type's floor (movie 200 MB, TV 150 MB, audio 3 MB) or IMAGE/OTHER type
   this project deliberately doesn't try to sort out) above a 4 KB floor — real short stories can be
   tiny (a verified competition-winning epub as small as 4.8 KB), so this only excludes empty/corrupt
   posts, not a quality bar.
-- Skip groups whose file names share no letters with the query (obfuscated sets).
+- Audio groups: skip if no file shares even a single letter with the query (obfuscated sets). This
+  deliberately stays a weak check for audio, since track file names often carry only the track
+  title, not the artist/album that was searched for — a stricter word match would reject real
+  matches. (Season packs use a stricter, word-based check instead; see above.)
 - Ticket token = first 24 hex chars of sha1 over the sorted file hashes. Stored:
   `{name, category, files:[{hash, extension, fn, size, sig}], created}`. `guid` and `link` are
   `{PUBLIC_URL}/api/nzb/{token}?apikey=...`.

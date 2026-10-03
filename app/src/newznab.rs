@@ -319,6 +319,26 @@ fn shares_letters(a: &str, b: &str) -> bool {
         .any(|c| a_letters.contains(&c))
 }
 
+/// True when `file_name` plausibly matches the show that was searched for. A letter-overlap check
+/// (see `shares_letters`) is far too weak here — any two real titles of reasonable length share
+/// *some* letters — so this requires at least one real word from the query (4+ letters, and not
+/// the season marker itself, which is always present and tells us nothing about the show) to
+/// actually appear in the file name. TV release names reliably include the show name whenever
+/// there's any identifying text in them at all, unlike music track names, which is why this
+/// stricter check is only used for season packs and `shares_letters` is left alone for audio.
+/// A query with no significant words left after filtering (e.g. a blank-query fallback probe)
+/// matches everything, same as before.
+fn matches_show_name(file_name: &str, query: &str, season: u32) -> bool {
+    let marker = format!("s{season:02}");
+    let name = file_name.to_lowercase();
+    let query_lower = query.to_lowercase();
+    let words: Vec<&str> = query_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 4 && *w != marker)
+        .collect();
+    words.is_empty() || words.iter().any(|w| name.contains(w))
+}
+
 fn to_ticket_file(f: &EasynewsFile) -> TicketFile {
     TicketFile {
         hash: f.hash.clone(),
@@ -402,7 +422,11 @@ pub fn build_releases(
             }
         }
         for files in groups.into_values() {
-            if files.len() < 2 || !files.iter().any(|f| shares_letters(&f.file_name, query)) {
+            if files.len() < 2
+                || !files
+                    .iter()
+                    .any(|f| matches_show_name(&f.file_name, query, season))
+            {
                 continue;
             }
             for f in &files {
@@ -760,30 +784,28 @@ mod tests {
     fn season_pack_title_falls_back_to_query_when_filenames_omit_the_show_name() {
         // Real-world case found live (2026-10-02): episode files inside a show-named folder,
         // named just "S01E01.mkv" etc, with no show name of their own to derive a title from.
+        // Unit-tests `season_pack_title` directly: such files no longer group at all (see
+        // `season_search_does_not_group_files_with_no_show_name_match` below), but the title
+        // function itself should still fall back sensibly if it's ever called with them.
         let resp = SearchResponse::from_json(&json!({
             "data": [
                 {
                     "0": "nn110001", "10": "S01E01", "11": ".mkv",
                     "rawSize": 200_000_000u64, "ts": 1_700_000_000i64, "7": "poster5",
-                    "19": "bare-set-1", "type": "VIDEO", "fullres": "1920x1080",
+                    "type": "VIDEO", "fullres": "1920x1080",
                     "passwd": false, "virus": false, "sig": "n1",
                 },
                 {
                     "0": "nn110002", "10": "S01E02", "11": ".mkv",
                     "rawSize": 210_000_000u64, "ts": 1_700_000_000i64, "7": "poster5",
-                    "19": "bare-set-1", "type": "VIDEO", "fullres": "1920x1080",
+                    "type": "VIDEO", "fullres": "1920x1080",
                     "passwd": false, "virus": false, "sig": "n2",
                 },
             ],
         }))
         .unwrap();
-        let mode = SearchMode::TvSearch {
-            season: Some(1),
-            ep: None,
-        };
-        let releases = build_releases(&mode, "Friends", resp.data, &Thresholds::default());
-        assert_eq!(releases.len(), 1);
-        assert_eq!(releases[0].title, "Friends S01");
+        let files: Vec<&EasynewsFile> = resp.data.iter().collect();
+        assert_eq!(season_pack_title(&files, 1, "Friends"), "Friends S01");
     }
 
     #[test]
@@ -796,14 +818,36 @@ mod tests {
                 {
                     "0": "qq110001", "10": "S01E01", "11": ".mkv",
                     "rawSize": 200_000_000u64, "ts": 1_700_000_000i64, "7": "poster6",
-                    "19": "bare-set-2", "type": "VIDEO", "fullres": "1920x1080",
+                    "type": "VIDEO", "fullres": "1920x1080",
                     "passwd": false, "virus": false, "sig": "q1",
                 },
+            ],
+        }))
+        .unwrap();
+        let files: Vec<&EasynewsFile> = resp.data.iter().collect();
+        assert_eq!(season_pack_title(&files, 1, "Friends S01"), "Friends S01");
+    }
+
+    #[test]
+    fn season_search_does_not_group_files_with_no_show_name_match() {
+        // The real false positive found live (2026-10-02): unrelated "Homicide" episode files
+        // matched a "Friends S01" search purely because they happened to share some letters with
+        // the query -- any two real titles of reasonable length do. Fixed by requiring a real
+        // word from the query to actually appear in the file name; these files should now fall
+        // through as separate singles instead of being bundled into a wrongly-labeled pack.
+        let resp = SearchResponse::from_json(&json!({
+            "data": [
                 {
-                    "0": "qq110002", "10": "S01E02", "11": ".mkv",
-                    "rawSize": 210_000_000u64, "ts": 1_700_000_000i64, "7": "poster6",
-                    "19": "bare-set-2", "type": "VIDEO", "fullres": "1920x1080",
-                    "passwd": false, "virus": false, "sig": "q2",
+                    "0": "hh110001", "10": "[S01.E01] Homicide - Carnegie Deli Massacre", "11": ".mkv",
+                    "rawSize": 200_000_000u64, "ts": 1_700_000_000i64, "7": "poster7",
+                    "19": "homicide-set-1", "type": "VIDEO", "fullres": "1920x1080",
+                    "passwd": false, "virus": false, "sig": "h1",
+                },
+                {
+                    "0": "hh110002", "10": "[S01.E03] Homicide - Vanished On Wall Street", "11": ".mkv",
+                    "rawSize": 210_000_000u64, "ts": 1_700_000_000i64, "7": "poster7",
+                    "19": "homicide-set-1", "type": "VIDEO", "fullres": "1920x1080",
+                    "passwd": false, "virus": false, "sig": "h2",
                 },
             ],
         }))
@@ -813,8 +857,12 @@ mod tests {
             ep: None,
         };
         let releases = build_releases(&mode, "Friends S01", resp.data, &Thresholds::default());
-        assert_eq!(releases.len(), 1);
-        assert_eq!(releases[0].title, "Friends S01");
+        assert_eq!(
+            releases.len(),
+            2,
+            "unrelated files sharing letters but no real word with the query must not be bundled into one pack"
+        );
+        assert!(releases.iter().all(|r| r.files.len() == 1));
     }
 
     /// Shaped like a real Easynews DOCUMENT response (verified 2026-10-02): small epub files,
