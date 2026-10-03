@@ -33,6 +33,27 @@ fn only_tv_categories(cat: Option<&String>) -> bool {
     !ids.is_empty() && ids.iter().all(|id| (5000..6000).contains(id))
 }
 
+/// When a plain `t=search` is scoped (via `cat`) to exactly one of Movies/TV, Audio, or Books,
+/// return the matching Easynews `fty[]` filter. Plain search normally asks Easynews for every
+/// type so it can classify video as movie-vs-TV itself, but Easynews' own relevance ranking can
+/// bury real matches behind non-video junk that happens to share the same text — found live
+/// (2026-10-03): "Romeo Must Die 2000" with no type filter returned zero VIDEO files in the first
+/// 100 raw results (88 were ARCHIVE, from old-style un-unpacked multi-part posts), even though 75
+/// real VIDEO matches exist further down. Narrowing the Easynews-side query by `cat` avoids this.
+fn cat_type_filter(cat: Option<&String>) -> Option<&'static str> {
+    let cat = cat?;
+    let category_type = |id: u32| match id {
+        2000..=2999 | 5000..=5999 => Some("VIDEO"),
+        3000..=3999 => Some("AUDIO"),
+        7000..=7999 => Some("DOCUMENT"),
+        _ => None,
+    };
+    let mut ids = cat.split(',').filter_map(|s| s.trim().parse().ok());
+    let first = category_type(ids.next()?)?;
+    ids.all(|id| category_type(id) == Some(first))
+        .then_some(first)
+}
+
 fn error_xml(message: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?><error code="100" description="{}"/>"#,
@@ -93,7 +114,15 @@ pub async fn search(
     } else {
         q_term.clone()
     };
-    let (queries, types) = easynews_query(&mode, effective_q.as_deref());
+    let (queries, mut types) = easynews_query(&mode, effective_q.as_deref());
+    // Plain search has no type filter of its own; narrow it when `cat` unambiguously says what
+    // kind of result is wanted (see `cat_type_filter`), so real matches aren't buried in the raw,
+    // unrestricted search by non-video/audio/document junk sharing the same text.
+    if matches!(mode, SearchMode::Search)
+        && let Some(t) = cat_type_filter(q.get("cat"))
+    {
+        types = vec![t];
+    }
     let limit: usize = q
         .get("limit")
         .and_then(|s| s.parse().ok())
@@ -207,5 +236,35 @@ pub async fn nzb(
             resp
         }
         None => (StatusCode::NOT_FOUND, "ticket not found or expired").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cat_type_filter_narrows_single_type_categories() {
+        assert_eq!(
+            cat_type_filter(Some(&"2030,2040,2045,2000".to_string())),
+            Some("VIDEO")
+        );
+        assert_eq!(
+            cat_type_filter(Some(&"5030,5040,5045,5000".to_string())),
+            Some("VIDEO")
+        );
+        assert_eq!(
+            cat_type_filter(Some(&"3010,3040".to_string())),
+            Some("AUDIO")
+        );
+        assert_eq!(cat_type_filter(Some(&"7020".to_string())), Some("DOCUMENT"));
+    }
+
+    #[test]
+    fn cat_type_filter_declines_mixed_or_absent_categories() {
+        assert_eq!(cat_type_filter(None), None);
+        assert_eq!(cat_type_filter(Some(&String::new())), None);
+        // Movies + Audio together: genuinely ambiguous, must not guess.
+        assert_eq!(cat_type_filter(Some(&"2000,3000".to_string())), None);
     }
 }

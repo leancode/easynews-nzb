@@ -105,7 +105,7 @@ Prowlarr caches caps per indexer; after a change, edit and save the indexer to r
 
 | Newznab call | Easynews query | type filter | post-filter |
 |---|---|---|---|
-| `t=search&q=` | `q` | none | none |
+| `t=search&q=` | `q` | none, unless `cat` unambiguously names one type (see below) | none |
 | `t=movie&q=&year=` | `q year` | VIDEO | size >= 200 MB; name contains the year when given |
 | `t=tvsearch&q=&season=&ep=` | `q S{season:02d}E{ep:02d}`, then `q {season}x{ep:02d}` if empty | VIDEO | name matches the episode pattern; size >= 150 MB |
 | `t=tvsearch&q=&season=` (no `ep`) | `q S{season:02d}` | VIDEO | season pack: group matching files sharing a `setid`; lone files fall back to single-episode releases |
@@ -115,6 +115,18 @@ Prowlarr caches caps per indexer; after a change, edit and save the indexer to r
 Drop items with `passwd` or `virus` true, names containing `sample`, and (outside book search) sizes
 under the type's floor (movie 200 MB, TV 150 MB, audio 3 MB) or IMAGE/OTHER types. Honour `cat`
 (comma list), `limit` (page size) and `offset` (page).
+
+Plain `t=search` has no type filter of its own, by design — it's meant to span everything so a
+bare video result can be classified movie-vs-TV by filename. In practice, apps like Radarr send
+plain `t=search` (not `t=movie`) for their real release searches, with `q` carrying the title and
+year together and `cat` scoped to Movies only. Without a type filter, Easynews' own relevance
+ranking can bury every real match behind non-video junk sharing the same text — verified live
+(2026-10-03): `gps=Romeo Must Die 2000` with no type filter returned zero `VIDEO` files in the
+first 100 raw results (88 were `ARCHIVE`, old-style un-unpacked multi-part posts) despite 75 real
+`VIDEO` matches existing further down. So when `cat` unambiguously names exactly one of
+Movies/TV (-> `VIDEO`), Audio (-> `AUDIO`), or Books (-> `DOCUMENT`), that's used as the Easynews
+type filter even under plain search; a `cat` spanning more than one of those, or absent, stays
+unrestricted as before.
 
 ### 3.3 Releases and tickets
 
