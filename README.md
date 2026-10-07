@@ -41,6 +41,7 @@ Without a real SABnzbd, easynews-nzb runs alone and simply answers "nothing else
 | `/api/nzb/{ticket}` | The NZB for a search result (a ticket, see the design document) |
 | `/sab/api` | SABnzbd-compatible API: `version`, `get_config`, `get_cats`, `addfile`, `addurl`, `queue`, `history`, deletes, pause/resume |
 | `/health` | Status JSON |
+| `/ui` | Web UI: recent searches, downloads (by app and destination), and logs. Same `API_KEY`, entered once in the page itself |
 
 See "Configuration" below for how to set it up.
 

@@ -3,11 +3,13 @@ mod config;
 mod easynews;
 mod health;
 mod jobs;
+mod logbuf;
 mod models;
 mod newznab;
 mod nzb;
 mod sab;
 mod state;
+mod ui;
 mod xml;
 
 use std::sync::Arc;
@@ -48,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
+        .with_writer(logbuf::tee_writer)
         .init();
 
     let config = Config::from_env()?;
@@ -75,6 +78,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/nzb/{token}", get(api::nzb))
         .route("/sab/api", get(sab::handle).post(sab::handle))
         .route("/health", get(health::handle))
+        .route("/ui", get(ui::page))
+        .route("/ui/api/searches", get(ui::api_searches))
+        .route("/ui/api/downloads", get(ui::api_downloads))
+        .route("/ui/api/logs", get(ui::api_logs))
         .with_state(state)
         .layer(middleware::from_fn(log_requests));
 

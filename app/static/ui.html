@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>easynews-nzb</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: #111; color: #eee; }
+  header { padding: 12px 16px; background: #1b1b1b; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  nav button { background: none; border: none; color: #aaa; padding: 8px 12px; cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; }
+  nav button.active { color: #fff; border-bottom-color: #4ea1ff; }
+  main { padding: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #262626; white-space: nowrap; }
+  th { color: #999; font-weight: 600; position: sticky; top: 0; background: #111; }
+  td.wrap { white-space: normal; max-width: 420px; overflow-wrap: anywhere; }
+  tr:hover td { background: #1a1a1a; }
+  .pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; color: #999; font-size: 13px; }
+  .pager button { background: #1b1b1b; border: 1px solid #333; color: #eee; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+  .pager button:disabled { opacity: 0.4; cursor: default; }
+  pre#logs { background: #000; color: #ccc; padding: 12px; border-radius: 6px; max-height: 75vh; overflow: auto; font-size: 12px; line-height: 1.4; }
+  .status-Completed { color: #5fd16a; }
+  .status-Failed { color: #ff6b6b; }
+  .status-Downloading { color: #4ea1ff; }
+  .status-Queued { color: #aaa; }
+  .hint { color: #777; font-size: 12px; margin-bottom: 10px; }
+  #gate { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; gap: 12px; }
+  #gate input { padding: 8px; font-size: 14px; border-radius: 4px; border: 1px solid #333; background: #1b1b1b; color: #eee; width: 260px; }
+  #gate button { padding: 8px 16px; border-radius: 4px; border: none; background: #4ea1ff; color: #111; cursor: pointer; font-weight: 600; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="gate">
+  <h1>easynews-nzb</h1>
+  <input id="keyInput" type="password" placeholder="API key">
+  <button id="keyGo">Open</button>
+  <div id="keyError" style="color:#ff6b6b;font-size:13px;"></div>
+</div>
+
+<div id="app" class="hidden">
+<header>
+  <h1>easynews-nzb</h1>
+  <nav>
+    <button data-tab="searches" class="active">Searches</button>
+    <button data-tab="downloads">Downloads</button>
+    <button data-tab="logs">Logs</button>
+  </nav>
+  <button id="changeKey" style="margin-left:auto;background:none;border:1px solid #333;color:#999;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;">Change key</button>
+</header>
+<main>
+  <div id="tab-searches">
+    <div class="hint">Searches normally arrive via Prowlarr's indexer proxy, not directly from Sonarr/Radarr, so "Client" is usually Prowlarr — "Kind" is the more reliable signal for what the search was actually for.</div>
+    <table>
+      <thead><tr><th>Time</th><th>Kind</th><th>Mode</th><th class="wrap">Query</th><th>Cat</th><th>Results</th><th class="wrap">Client</th></tr></thead>
+      <tbody id="searches-body"></tbody>
+    </table>
+    <div class="pager" id="searches-pager"></div>
+  </div>
+
+  <div id="tab-downloads" style="display:none">
+    <table>
+      <thead><tr><th>Time</th><th>Status</th><th>Category</th><th class="wrap">Title</th><th>Size</th><th class="wrap">Storage</th><th class="wrap">Requested By</th></tr></thead>
+      <tbody id="downloads-body"></tbody>
+    </table>
+    <div class="pager" id="downloads-pager"></div>
+  </div>
+
+  <div id="tab-logs" style="display:none">
+    <div class="hint">Last 2000 log lines, kept in memory — auto-refreshes every 5s.</div>
+    <pre id="logs">loading…</pre>
+  </div>
+</main>
+</div>
+
+<script>
+const PAGE_SIZE = 100;
+function safeStorage(fn, fallback) {
+  try { return fn(); } catch (e) { return fallback; }
+}
+let apiKey = safeStorage(() => localStorage.getItem('easynews_ui_key'), null) || '';
+let state = { searches: 1, downloads: 1 };
+let logTimer = null;
+
+function showGate(message) {
+  clearInterval(logTimer);
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('gate').classList.remove('hidden');
+  document.getElementById('keyError').textContent = message || '';
+}
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  return new Date(ts * 1000).toLocaleString();
+}
+function fmtBytes(n) {
+  if (!n) return '0 MB';
+  const mb = n / 1024 / 1024;
+  if (mb > 1024) return (mb / 1024).toFixed(2) + ' GB';
+  return mb.toFixed(1) + ' MB';
+}
+function esc(s) {
+  return (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function api(path, params) {
+  const url = new URL(path, location.href);
+  url.searchParams.set('apikey', apiKey);
+  for (const [k, v] of Object.entries(params || {})) url.searchParams.set(k, v);
+  const resp = await fetch(url);
+  if (resp.status === 401) {
+    // The key that got us past the gate stopped working (rotated, typo'd in by hand into
+    // localStorage, etc.) — bounce back to the gate instead of leaving a half-rendered page.
+    safeStorage(() => localStorage.removeItem('easynews_ui_key'), null);
+    showGate('Incorrect API key');
+    throw new Error('unauthorized');
+  }
+  return resp.json();
+}
+
+function renderPager(id, page, pageSize, total, onChange) {
+  const el = document.getElementById(id);
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  el.innerHTML = '';
+  const prev = document.createElement('button');
+  prev.textContent = '← Newer';
+  prev.disabled = page <= 1;
+  prev.onclick = () => onChange(page - 1);
+  const next = document.createElement('button');
+  next.textContent = 'Older →';
+  next.disabled = page >= pages;
+  next.onclick = () => onChange(page + 1);
+  const label = document.createElement('span');
+  label.textContent = `page ${page} of ${pages} (${total} total)`;
+  el.append(prev, label, next);
+}
+
+async function loadSearches() {
+  const data = await api('/ui/api/searches', { page: state.searches, page_size: PAGE_SIZE });
+  const body = document.getElementById('searches-body');
+  body.innerHTML = data.items.map(r => `
+    <tr>
+      <td>${fmtTime(r.ts)}</td>
+      <td>${esc(r.kind)}</td>
+      <td>${esc(r.mode || 'search')}</td>
+      <td class="wrap">${esc(r.query || '')}</td>
+      <td>${esc(r.cat || '')}</td>
+      <td>${r.result_count}</td>
+      <td class="wrap">${esc(r.client)}</td>
+    </tr>`).join('');
+  renderPager('searches-pager', data.page, data.page_size, data.total, p => { state.searches = p; loadSearches(); });
+}
+
+async function loadDownloads() {
+  const data = await api('/ui/api/downloads', { page: state.downloads, page_size: PAGE_SIZE });
+  const body = document.getElementById('downloads-body');
+  body.innerHTML = data.items.map(r => `
+    <tr>
+      <td>${fmtTime(r.completed || r.created)}</td>
+      <td class="status-${esc(r.status)}">${esc(r.status)}</td>
+      <td>${esc(r.category)}</td>
+      <td class="wrap">${esc(r.title)}${r.fail_message ? `<br><span style="color:#ff6b6b">${esc(r.fail_message)}</span>` : ''}</td>
+      <td>${fmtBytes(r.total_bytes)}</td>
+      <td class="wrap">${esc(r.storage || '')}</td>
+      <td class="wrap">${esc(r.requested_by || '')}</td>
+    </tr>`).join('');
+  renderPager('downloads-pager', data.page, data.page_size, data.total, p => { state.downloads = p; loadDownloads(); });
+}
+
+async function loadLogs() {
+  const data = await api('/ui/api/logs', { lines: 2000 });
+  const pre = document.getElementById('logs');
+  const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+  pre.textContent = data.lines.join('\n');
+  if (atBottom) pre.scrollTop = pre.scrollHeight;
+}
+
+function showTab(name) {
+  for (const t of ['searches', 'downloads', 'logs']) {
+    document.getElementById('tab-' + t).style.display = (t === name) ? '' : 'none';
+  }
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  clearInterval(logTimer);
+  if (name === 'searches') loadSearches();
+  if (name === 'downloads') loadDownloads();
+  if (name === 'logs') { loadLogs(); logTimer = setInterval(loadLogs, 5000); }
+}
+
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+async function tryOpen(key) {
+  apiKey = key;
+  try {
+    await api('/ui/api/searches', { page: 1, page_size: 1 });
+    safeStorage(() => localStorage.setItem('easynews_ui_key', key), null);
+    document.getElementById('gate').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    showTab('searches');
+  } catch (e) {
+    showGate('Incorrect API key');
+  }
+}
+
+document.getElementById('keyGo').onclick = () => tryOpen(document.getElementById('keyInput').value);
+document.getElementById('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') tryOpen(e.target.value); });
+document.getElementById('changeKey').onclick = () => {
+  safeStorage(() => localStorage.removeItem('easynews_ui_key'), null);
+  apiKey = '';
+  document.getElementById('keyInput').value = '';
+  showGate('');
+};
+
+if (apiKey) tryOpen(apiKey);
+</script>
+</body>
+</html>

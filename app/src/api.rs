@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use crate::jobs;
-use crate::models::Ticket;
+use crate::models::{SearchRecord, Ticket};
 use crate::newznab::{
     CAPS_XML, RssItem, SearchMode, build_releases, build_rss, easynews_query, ticket_token,
 };
@@ -33,6 +33,17 @@ fn only_tv_categories(cat: Option<&String>) -> bool {
     !ids.is_empty() && ids.iter().all(|id| (5000..6000).contains(id))
 }
 
+/// True when a `cat` query value names only Movie categories (2xxx) — the Movie/TV counterpart
+/// of `only_tv_categories`, used by `search_kind` to label plain searches more precisely.
+fn only_movie_categories(cat: Option<&String>) -> bool {
+    let Some(cat) = cat else { return false };
+    let ids: Vec<u32> = cat
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    !ids.is_empty() && ids.iter().all(|id| (2000..3000).contains(id))
+}
+
 /// When a plain `t=search` is scoped (via `cat`) to exactly one of Movies/TV, Audio, or Books,
 /// return the matching Easynews `fty[]` filter. Plain search normally asks Easynews for every
 /// type so it can classify video as movie-vs-TV itself, but Easynews' own relevance ranking can
@@ -54,6 +65,26 @@ fn cat_type_filter(cat: Option<&String>) -> Option<&'static str> {
         .then_some(first)
 }
 
+/// What kind of content a search was for, for the web UI's history view — explicit search
+/// modes (`t=movie`/`tvsearch`/`music`/`book`) say so directly; a plain `t=search` falls back to
+/// `cat_type_filter`'s category narrowing, same logic used to scope the Easynews query itself.
+fn search_kind(mode: &SearchMode, cat: Option<&String>) -> &'static str {
+    match mode {
+        SearchMode::Movie { .. } => "Movie",
+        SearchMode::TvSearch { .. } => "TV",
+        SearchMode::Music { .. } => "Music",
+        SearchMode::Book { .. } => "Book",
+        SearchMode::Search => match cat_type_filter(cat) {
+            Some("VIDEO") if only_tv_categories(cat) => "TV",
+            Some("VIDEO") if only_movie_categories(cat) => "Movie",
+            Some("VIDEO") => "Movie/TV",
+            Some("AUDIO") => "Music",
+            Some("DOCUMENT") => "Book",
+            _ => "General",
+        },
+    }
+}
+
 fn error_xml(message: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?><error code="100" description="{}"/>"#,
@@ -64,6 +95,7 @@ fn error_xml(message: &str) -> String {
 pub async fn search(
     State(state): State<Arc<AppState>>,
     Query(q): Query<HashMap<String, String>>,
+    headers: HeaderMap,
 ) -> Response {
     let t = q.get("t").cloned().unwrap_or_default();
     if t == "caps" {
@@ -171,6 +203,26 @@ pub async fn search(
     let page_offset = offset % 100;
     let page_slice: Vec<_> = releases.into_iter().skip(page_offset).take(limit).collect();
 
+    let client = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    let kind = search_kind(&mode, q.get("cat")).to_string();
+    let _ = state
+        .mutate_store(|s| {
+            s.push_search(SearchRecord {
+                ts: jobs::now(),
+                client,
+                kind,
+                mode: t.clone(),
+                query: q_term.clone(),
+                cat: q.get("cat").cloned(),
+                result_count: total,
+            });
+        })
+        .await;
+
     let refresh_query = queries.first().cloned().unwrap_or_default();
     let refresh_types: Vec<String> = types.iter().map(|s| s.to_string()).collect();
 
@@ -266,5 +318,65 @@ mod tests {
         assert_eq!(cat_type_filter(Some(&String::new())), None);
         // Movies + Audio together: genuinely ambiguous, must not guess.
         assert_eq!(cat_type_filter(Some(&"2000,3000".to_string())), None);
+    }
+
+    #[test]
+    fn search_kind_prefers_the_explicit_mode_over_cat() {
+        assert_eq!(
+            search_kind(&SearchMode::Movie { year: None }, None),
+            "Movie"
+        );
+        assert_eq!(
+            search_kind(
+                &SearchMode::TvSearch {
+                    season: None,
+                    ep: None
+                },
+                None
+            ),
+            "TV"
+        );
+        assert_eq!(
+            search_kind(
+                &SearchMode::Music {
+                    artist: None,
+                    album: None
+                },
+                None
+            ),
+            "Music"
+        );
+        assert_eq!(
+            search_kind(
+                &SearchMode::Book {
+                    author: None,
+                    title: None
+                },
+                None
+            ),
+            "Book"
+        );
+    }
+
+    #[test]
+    fn search_kind_falls_back_to_cat_for_plain_search() {
+        let cat = |s: &str| Some(s.to_string());
+        assert_eq!(
+            search_kind(&SearchMode::Search, cat("5030,5040").as_ref()),
+            "TV"
+        );
+        assert_eq!(
+            search_kind(&SearchMode::Search, cat("2030,2040").as_ref()),
+            "Movie"
+        );
+        assert_eq!(
+            search_kind(&SearchMode::Search, cat("3010").as_ref()),
+            "Music"
+        );
+        assert_eq!(
+            search_kind(&SearchMode::Search, cat("7020").as_ref()),
+            "Book"
+        );
+        assert_eq!(search_kind(&SearchMode::Search, None), "General");
     }
 }

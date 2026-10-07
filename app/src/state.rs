@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -9,10 +9,14 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 
 use crate::config::Config;
 use crate::easynews::EasynewsClient;
-use crate::models::{Job, Ticket};
+use crate::models::{Job, SearchRecord, Ticket};
 
 const TICKET_TTL_SECS: i64 = 48 * 3600;
 const MAX_PARALLEL_DOWNLOADS: usize = 2;
+/// Caps for the web UI's history views. Independent of `tickets`/`jobs`, which stay short-lived
+/// for their own operational reasons (ticket TTL, SABnzbd clients deleting their own history).
+const SEARCH_LOG_CAP: usize = 5000;
+const DOWNLOAD_LOG_CAP: usize = 5000;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Store {
@@ -24,6 +28,13 @@ pub struct Store {
     pub cached_get_config: Option<Value>,
     #[serde(default)]
     pub cached_get_cats: Option<Value>,
+    /// Durable history for the web UI. `download_log` mirrors every `Job` ever created, keyed
+    /// by `nzo_id`, and survives `sab::handle_delete` removing the job from `jobs` once the
+    /// SABnzbd client (Sonarr/Radarr/DroppedNeedle) has imported it and asks us to forget it.
+    #[serde(default)]
+    pub search_log: VecDeque<SearchRecord>,
+    #[serde(default)]
+    pub download_log: HashMap<String, Job>,
 }
 
 impl Store {
@@ -57,6 +68,29 @@ impl Store {
     pub fn prune_expired_tickets(&mut self, now: i64) {
         self.tickets
             .retain(|_, t| now - t.created < TICKET_TTL_SECS);
+    }
+
+    pub fn push_search(&mut self, record: SearchRecord) {
+        self.search_log.push_back(record);
+        while self.search_log.len() > SEARCH_LOG_CAP {
+            self.search_log.pop_front();
+        }
+    }
+
+    /// Mirror a job's current state into the durable download log. Called at every status
+    /// change so `download_log` stays current even though `jobs` can be cleared out from under
+    /// it by `sab::handle_delete`.
+    pub fn record_download(&mut self, job: &Job) {
+        self.download_log.insert(job.nzo_id.clone(), job.clone());
+        if self.download_log.len() > DOWNLOAD_LOG_CAP
+            && let Some(oldest_id) = self
+                .download_log
+                .values()
+                .min_by_key(|j| j.completed.unwrap_or(j.created))
+                .map(|j| j.nzo_id.clone())
+        {
+            self.download_log.remove(&oldest_id);
+        }
     }
 }
 

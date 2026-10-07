@@ -9,6 +9,7 @@ RUN mkdir src && echo "fn main() {}" > src/main.rs && \
     cargo build --release --target x86_64-unknown-linux-musl && \
     rm -rf src
 COPY app/src ./src
+COPY app/static ./static
 RUN touch src/main.rs && \
     cargo build --release --target x86_64-unknown-linux-musl && \
     cp target/x86_64-unknown-linux-musl/release/easynews-nzb /easynews-nzb

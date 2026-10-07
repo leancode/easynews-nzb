@@ -225,7 +225,14 @@ async fn handle_addfile(
             let ticket = state.read_store(|s| s.tickets.get(&token).cloned()).await;
             match ticket {
                 Some(ticket) => {
-                    let nzo_id = jobs::create_job(state, &ticket, cat, nzbname, priority).await;
+                    let requested_by = headers
+                        .get(axum::http::header::USER_AGENT)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let nzo_id =
+                        jobs::create_job(state, &ticket, cat, nzbname, priority, requested_by)
+                            .await;
                     Json(json!({"status": true, "nzo_ids": [nzo_id]})).into_response()
                 }
                 None => json_error("this ticket has expired; search again"),

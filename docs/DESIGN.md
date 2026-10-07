@@ -223,6 +223,35 @@ Forwarding sends the same method, query string and body to `SAB_URL/api`.
   (they resume from the partial file).
 - Directories 2775, files 664 (umask 002).
 
+## 9. Web UI
+
+`GET /ui` is a single embedded HTML page (no build step, no CDN assets — compiled into the binary
+via `include_str!`) showing three tabs: Searches, Downloads, Logs. Its data endpoints
+(`/ui/api/searches`, `/ui/api/downloads`, `/ui/api/logs`) require the same `apikey` as the rest of
+the API; the page itself prompts for it once and remembers it in the browser's `localStorage`.
+
+- **Searches**: every `/api` request (minus `t=caps`/`t=get`), from `Store.search_log` — a capped
+  ring buffer (5000 entries) independent of anything else, so it isn't affected by ticket TTLs or
+  SABnzbd history deletes. Each entry carries the raw `User-Agent` as `client` and a `kind` field
+  ("Movie"/"TV"/"Music"/"Book"/"General"/"Movie/TV") derived from the search mode or, for a plain
+  `t=search`, from `cat` via the same logic `cat_type_filter` uses to narrow the Easynews query.
+  **`client` is usually "Prowlarr/x.y.z", not the real caller** — Sonarr/Radarr reach a
+  Prowlarr-managed indexer through Prowlarr's own proxy, so we never see their direct request.
+  `kind` is the reliable signal for what a search was actually for; `client` is kept for whatever
+  diagnostic value it has (e.g. telling a direct caller apart from a proxied one).
+- **Downloads**: `Store.download_log`, keyed by `nzo_id`, mirroring every `Job` ever created. Jobs
+  in the live `jobs` map get deleted once their SABnzbd client (Sonarr/Radarr/DroppedNeedle) imports
+  them and calls `mode=history&name=delete` — `download_log` is a separate, append-only copy
+  (capped at 5000, oldest evicted by completion time) that `handle_delete` never touches, so the
+  download survives in the UI after the triggering app forgets about it. Each entry's
+  `requested_by` is the `User-Agent` on the `addfile` call that created it — this one *is* the
+  real caller, since SABnzbd-client calls go straight from Sonarr/Radarr/DroppedNeedle to us, with
+  no Prowlarr proxy in between.
+- **Logs**: the last 2000 `tracing` lines, kept in memory by a small `MakeWriter` (`logbuf.rs`)
+  that tees every formatted line to both stdout (so `docker logs` is unaffected) and a capped
+  in-process ring buffer — no log file or rotation on disk, consistent with the project staying a
+  single binary with no extra runtime dependencies.
+
 ## 7. Verification, standalone
 
 With `KEY` = the configured API key and the service on `127.0.0.1:8090`:

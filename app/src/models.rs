@@ -180,4 +180,28 @@ pub struct Job {
     pub completed: Option<i64>,
     pub storage: Option<String>,
     pub fail_message: Option<String>,
+    /// The SABnzbd client's User-Agent at the `addfile` call that created this job (e.g.
+    /// "Sonarr/4.0.20.3014"), so the UI can show which app downloaded what. Absent on jobs
+    /// persisted before this field existed.
+    #[serde(default)]
+    pub requested_by: String,
+}
+
+/// One `t=search`/`t=movie`/etc. request, kept for the web UI's search history view. Unlike a
+/// `Job`, nothing ever deletes these except the ring-buffer cap in `Store`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchRecord {
+    pub ts: i64,
+    /// Raw `User-Agent` header. Searches normally arrive via Prowlarr's indexer proxy, not
+    /// directly from Sonarr/Radarr, so this is usually "Prowlarr/x.y.z" rather than the app that
+    /// actually wanted the result. What matters more than which app asked is what kind of
+    /// content it was after, which `kind` captures directly from the search mode/`cat`.
+    pub client: String,
+    /// Content type the search was for: "Movie", "TV", "Music", "Book", or "General" for a
+    /// plain `t=search` with no category narrow enough to tell.
+    pub kind: String,
+    pub mode: String,
+    pub query: Option<String>,
+    pub cat: Option<String>,
+    pub result_count: usize,
 }

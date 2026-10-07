@@ -184,6 +184,9 @@ async fn run_job(state: Arc<AppState>, nzo_id: String) {
             if let Some(j) = s.jobs.get_mut(&nzo_id) {
                 j.status = JobStatus::Downloading;
             }
+            if let Some(job) = s.jobs.get(&nzo_id).cloned() {
+                s.record_download(&job);
+            }
         })
         .await;
 
@@ -215,6 +218,9 @@ async fn run_job(state: Arc<AppState>, nzo_id: String) {
                     fp.bytes_done = done_size;
                 }
                 s.tickets.insert(ticket.token.clone(), ticket.clone());
+                if let Some(job) = s.jobs.get(&nzo_id).cloned() {
+                    s.record_download(&job);
+                }
             })
             .await;
     }
@@ -236,6 +242,9 @@ async fn run_job(state: Arc<AppState>, nzo_id: String) {
                 j.completed = Some(now());
                 j.storage = Some(storage);
             }
+            if let Some(job) = s.jobs.get(&nzo_id).cloned() {
+                s.record_download(&job);
+            }
         })
         .await;
 }
@@ -248,6 +257,9 @@ async fn fail_job(state: &Arc<AppState>, nzo_id: &str, message: String) {
             if let Some(j) = s.jobs.get_mut(nzo_id) {
                 j.status = JobStatus::Failed;
                 j.fail_message = Some(message);
+            }
+            if let Some(job) = s.jobs.get(nzo_id).cloned() {
+                s.record_download(&job);
             }
         })
         .await;
@@ -264,6 +276,7 @@ pub async fn create_job(
     category: String,
     nzbname: Option<String>,
     priority: String,
+    requested_by: String,
 ) -> String {
     let nzo_id = format!("ez_{}", ticket.token);
     let title = nzbname.unwrap_or_else(|| ticket.name.clone());
@@ -293,10 +306,12 @@ pub async fn create_job(
         completed: None,
         storage: None,
         fail_message: None,
+        requested_by,
     };
     let _ = state
         .mutate_store(|s| {
-            s.jobs.insert(nzo_id.clone(), job);
+            s.jobs.insert(nzo_id.clone(), job.clone());
+            s.record_download(&job);
         })
         .await;
     spawn_job(state.clone(), nzo_id.clone());
@@ -318,6 +333,9 @@ pub async fn resume_jobs_on_startup(state: Arc<AppState>) {
             .mutate_store(|s| {
                 if let Some(j) = s.jobs.get_mut(&id) {
                     j.status = JobStatus::Queued;
+                }
+                if let Some(job) = s.jobs.get(&id).cloned() {
+                    s.record_download(&job);
                 }
             })
             .await;
